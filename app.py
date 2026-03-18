@@ -18,7 +18,6 @@ install_mamba()
 ABOUT = """
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
 Upload or record a noisy clip, then click **Enhance** to listen to the result and view its spectrogram.
-(ref: https://huggingface.co/spaces/rc19477/Speech_Enhancement_Mamba)
 """
 
 import torch
@@ -108,8 +107,8 @@ def enhance(filepath, low_pass_sampling_rate, target_sampling_rate):
 
 with gr.Blocks() as demo:
     gr.Markdown(ABOUT)
-    gr.Markdown("**Note 1**: For bandwidth extension, the performance may be affected by the characteristics of the input data, particularly the cutoff pattern. A simple solution is to apply low-pass filtering beforehand.")
-    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. To address this, use the chunk-wise inference implementation provided on the Hugging Face.")
+    gr.Markdown("**Note 1**: For bandwidth extension, performance may depend on the characteristics of the input data, particularly the cutoff pattern. A simple approach is to apply low-pass filtering beforehand.")
+    gr.Markdown("**Note 2**: When processing long audio inputs, out-of-memory (OOM) errors may occur. To mitigate this, use the chunk-wise inference implementation provided on Hugging Face.")
 
     with gr.Row():
         with gr.Column():
