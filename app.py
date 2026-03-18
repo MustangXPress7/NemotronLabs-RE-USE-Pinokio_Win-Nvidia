@@ -27,7 +27,7 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 from models.stfts import mag_phase_stft, mag_phase_istft
-from models.generator_SEMamba_MPSEnet_time_d4 import SEMamba
+from models.generator_SEMamba_time_d4 import SEMamba
 from utils.util import load_config, pad_or_trim_to_match
 
 
