@@ -1,11 +1,11 @@
 ---
 title: RE USE
-emoji: 🔥
+emoji: 🤫
 colorFrom: blue
 colorTo: purple
 sdk: gradio
 sdk_version: 6.9.0
-python_version: '3.12'
+python_version: '3.10'
 app_file: app.py
 pinned: false
 short_description: A universal speech enhancement model for diverse degradation
