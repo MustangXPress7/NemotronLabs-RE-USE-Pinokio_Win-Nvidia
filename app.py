@@ -18,10 +18,12 @@ install_mamba()
 ABOUT = """
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
 Upload or record a noisy clip, then click **Enhance** to listen to the result and view its spectrogram.
+(ref: https://huggingface.co/spaces/rc19477/Speech_Enhancement_Mamba)
 """
 
 import torch
 import torchaudio
+import torch.nn as nn
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +31,7 @@ from models.stfts import mag_phase_stft, mag_phase_istft
 from models.generator_SEMamba_time_d4 import SEMamba
 from utils.util import load_config, pad_or_trim_to_match
 
+RELU = nn.ReLU()
 
 def make_even(value):
     value = int(round(value))
@@ -79,6 +82,10 @@ def enhance(filepath, low_pass_sampling_rate, target_sampling_rate):
             addeps=False
         )
         amp_g, pha_g, _ = USE_model(noisy_mag, noisy_pha)
+        # To remove "strange sweep artifact"
+        mag = torch.expm1(RELU(amp_g)) # [1, F, T]
+        zero_portion = torch.sum(mag==0, 1)/mag.shape[1]
+        amp_g[:,:,(zero_portion>0.5)[0]] = 0
         
         audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, compress_factor)
         audio_g = pad_or_trim_to_match(noisy_wav.detach(), audio_g, pad_value=1e-8)  # Align lengths using epsilon padding
@@ -107,8 +114,8 @@ def enhance(filepath, low_pass_sampling_rate, target_sampling_rate):
 
 with gr.Blocks() as demo:
     gr.Markdown(ABOUT)
-    gr.Markdown("**Note 1**: For bandwidth extension, performance may depend on the characteristics of the input data, particularly the cutoff pattern. A simple approach is to apply low-pass filtering beforehand.")
-    gr.Markdown("**Note 2**: When processing long audio inputs, out-of-memory (OOM) errors may occur. To mitigate this, use the chunk-wise inference implementation provided on Hugging Face.")
+    gr.Markdown("**Note 1**: For bandwidth extension, the performance may be affected by the characteristics of the input data, particularly the cutoff pattern. A simple solution is to apply low-pass filtering beforehand.")
+    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. To address this, use the chunk-wise inference implementation provided on the Hugging Face.")
 
     with gr.Row():
         with gr.Column():
