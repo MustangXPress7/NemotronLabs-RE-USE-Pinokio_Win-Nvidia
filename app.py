@@ -44,9 +44,14 @@ n_fft, hop_size, win_size = cfg1['stft_cfg']['n_fft'], cfg1['stft_cfg']['hop_siz
 compress_factor = cfg1['model_cfg']['compress_factor']
 sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
-config_path = hf_hub_download(repo_id="nvidia/RE-USE", filename="config.json")
 USE_model = SEMamba(cfg1).to(device)
-checkpoint_file = "exp/30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_peak_GAN_tel_mic/g_01134000.pth"
+#checkpoint_file = "exp/30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_peak_GAN_tel_mic/g_01134000.pth"
+config_path = hf_hub_download(repo_id="nvidia/RE-USE", filename="config.json")
+checkpoint_file = hf_hub_download(
+    repo_id="nvidia/RE-USE", 
+    subfolder="exp/30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_peak_GAN_tel_mic", 
+    filename="g_01134000.pth"
+)
 state_dict = torch.load(checkpoint_file, map_location=device)
 USE_model.load_state_dict(state_dict['generator'])
 USE_model.eval()
