@@ -46,7 +46,7 @@ sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
 USE_model = SEMamba(cfg1).to(device)
 #checkpoint_file = "exp/30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_peak_GAN_tel_mic/g_01134000.pth"
-config_path = hf_hub_download(repo_id="nvidia/RE-USE", filename="config.json")
+config_path = hf_hub_download(repo_id="nvidia/RE-USE", filename="config.json", force_download=True)
 checkpoint_file = hf_hub_download(
     repo_id="nvidia/RE-USE", 
     subfolder="exp/30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_peak_GAN_tel_mic", 
