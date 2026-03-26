@@ -44,7 +44,7 @@ n_fft, hop_size, win_size = cfg1['stft_cfg']['n_fft'], cfg1['stft_cfg']['hop_siz
 compress_factor = cfg1['model_cfg']['compress_factor']
 sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
-USE_model = SEMamba.from_pretrained("nvidia/RE-USE", cfg=cfg).to(device)
+USE_model = SEMamba.from_pretrained("nvidia/RE-USE", cfg=cfg1).to(device)
 USE_model.eval()
 
 @spaces.GPU
