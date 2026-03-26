@@ -9,10 +9,11 @@
 import torch
 import torch.nn as nn
 from einops import rearrange
+from huggingface_hub import PyTorchModelHubMixin
 from .mamba_block2_SEMamba import TFMambaBlock
 from .codec_module_time_d4 import DenseEncoder, MagDecoder, PhaseDecoder
 
-class SEMamba(nn.Module):
+class SEMamba(nn.Module, PyTorchModelHubMixin):
     """
     SEMamba model for speech enhancement using Mamba blocks.
     
