@@ -12,3 +12,5 @@ torchaudio==2.11.0
 numpy==1.26.4
 resampy
 transformers==4.33.3
+causal-conv1d>=1.4.0
+mamba-ssm==2.2.2
