@@ -1,5 +1,4 @@
 packaging
-ninja
 librosa
 soundfile
 pyyaml
@@ -8,10 +7,8 @@ tensorboard
 pesq
 einops
 matplotlib
+torch==2.6.0
+torchaudio==2.6.0
 numpy==1.26.4
 resampy
 transformers==4.33.3
-
-torch==2.11.0
-torchaudio==2.11.0
-mamba-ssm
