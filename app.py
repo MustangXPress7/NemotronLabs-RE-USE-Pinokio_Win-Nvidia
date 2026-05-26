@@ -6,14 +6,42 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import shlex
+import os
+import sys
 import subprocess
+import tempfile
 import spaces
 import gradio as gr
 
-def install_mamba():
-    subprocess.run(shlex.split("pip install https://github.com/state-spaces/mamba/releases/download/v2.2.2/mamba_ssm-2.2.2+cu122torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"))
-install_mamba()
+CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
+
+
+def _install_mamba_pure_python():
+    """Install mamba-ssm + causal-conv1d without the CUDA-kernel build.
+    Building from source against torch 2.10 takes >1500s (the ZeroGPU per-call
+    cap), so we skip the CUDA kernels and rely on mamba_ssm's pure-Python
+    selective_scan_ref fallback. Slower at inference but installs in seconds."""
+    try:
+        import mamba_ssm  # noqa: F401
+        import causal_conv1d  # noqa: F401
+        return
+    except ImportError:
+        pass
+    env = os.environ.copy()
+    env["MAMBA_SKIP_CUDA_BUILD"] = "TRUE"
+    env["CAUSAL_CONV1D_SKIP_CUDA_BUILD"] = "TRUE"
+    env["MAMBA_FORCE_BUILD"] = "FALSE"
+    env["CAUSAL_CONV1D_FORCE_BUILD"] = "FALSE"
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "setuptools", "wheel", "ninja", "packaging"],
+    )
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--no-build-isolation", "--no-deps", "causal-conv1d", "mamba-ssm"],
+        env=env,
+    )
+
+
+_install_mamba_pure_python()
 
 ABOUT = """
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
