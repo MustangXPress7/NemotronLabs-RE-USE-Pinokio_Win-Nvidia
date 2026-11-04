@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "title": "RE-USE Speech Enhancement",
+  "description": "A universal speech enhancement model for diverse degradations, sampling rates, and languages",
+  "icon": "icon.png",
+  "platform": ["win32", "linux"],
+  "arch": ["x64"],
+  "gpu": ["nvidia"],
+  "categories": ["audio", "ai", "speech-enhancement"],
+  "tags": ["gradio", "mamba", "speech", "enhancement", "nvidia", "cuda"],
+  "license": "custom",
+  "homepage": "https://huggingface.co/spaces/nvidia/RE-USE",
+  "repository": "https://github.com/NVIDIA/RE-USE"
+}

@@ -12,36 +12,37 @@ import subprocess
 import tempfile
 import spaces
 import gradio as gr
+import soundfile as sf
+import time
+import math
 
 CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
 
-
 def _install_mamba_pure_python():
-    """Install mamba-ssm + causal-conv1d without the CUDA-kernel build.
-    Building from source against torch 2.10 takes >1500s (the ZeroGPU per-call
-    cap), so we skip the CUDA kernels and rely on mamba_ssm's pure-Python
-    selective_scan_ref fallback. Slower at inference but installs in seconds."""
-    try:
-        import mamba_ssm  # noqa: F401
-        import causal_conv1d  # noqa: F401
-        return
-    except ImportError:
-        pass
-    env = os.environ.copy()
-    env["MAMBA_SKIP_CUDA_BUILD"] = "TRUE"
-    env["CAUSAL_CONV1D_SKIP_CUDA_BUILD"] = "TRUE"
-    env["MAMBA_FORCE_BUILD"] = "FALSE"
-    env["CAUSAL_CONV1D_FORCE_BUILD"] = "FALSE"
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "--no-deps", "setuptools", "wheel", "ninja", "packaging"],
-    )
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "--no-build-isolation", "--no-deps", "causal-conv1d", "mamba-ssm"],
-        env=env,
-    )
+    """Disabled: using custom compiled CUDA kernels."""
+    pass
 
+try:
+    import sysconfig, pathlib
+    _sp = pathlib.Path(sysconfig.get_paths()['purelib'])
+    _p = _sp / 'mamba_ssm' / 'ops' / 'selective_scan_interface.py'
+    if _p.exists():
+        _s = _p.read_text()
+        _o = 'import selective_scan_cuda\n'
+        _n = 'try:\n    import selective_scan_cuda\nexcept ImportError:\n    selective_scan_cuda = None\n'
+        if _o in _s and 'selective_scan_cuda = None' not in _s:
+            _p.write_text(_s.replace(_o, _n, 1))
+except Exception:
+    pass
 
 _install_mamba_pure_python()
+
+try:
+    import mamba_ssm.ops.selective_scan_interface as _ssi
+    import mamba_ssm.modules.mamba_simple as _ms
+    _ms.selective_scan_fn = _ssi.selective_scan_ref
+except Exception:
+    pass
 
 ABOUT = """
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
@@ -72,71 +73,123 @@ n_fft, hop_size, win_size = cfg1['stft_cfg']['n_fft'], cfg1['stft_cfg']['hop_siz
 compress_factor = cfg1['model_cfg']['compress_factor']
 sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
+_USE_MODEL = None
+
+def _get_model():
+    global _USE_MODEL
+    if _USE_MODEL is None:
+        print("Loading model (first time, may take a while)...", flush=True)
+        _USE_MODEL = SEMamba.from_pretrained("nvidia/NVIDIA-NemotronLabs-RE-USE", cfg=cfg1).to(device)
+        _USE_MODEL.eval()
+        print("Model loaded.", flush=True)
+    return _USE_MODEL
+
 @spaces.GPU
-def enhance(filepath, low_pass_sampling_rate, target_sampling_rate): 
-    
-    USE_model = SEMamba.from_pretrained("nvidia/RE-USE", cfg=cfg1).to(device)
-    USE_model.eval()
+def enhance(filepath, lp_sr, target_sr):
+    try:
+        with torch.no_grad():
+            # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
+            _data, noisy_sr = sf.read(filepath, dtype='float32', always_2d=True)
+            Noisy_wav = torch.from_numpy(_data.T.copy())
+            original_noisy_wav = Noisy_wav.clone()
+            original_sr = noisy_sr
 
-    with torch.no_grad():
-        noisy_wav, noisy_sr = torchaudio.load(filepath)
-        torchaudio.save("original.wav", noisy_wav.cpu(), noisy_sr)
-        original_noisy_wav = noisy_wav
-        original_sr = noisy_sr
-        
-        if target_sampling_rate != '':
-            if low_pass_sampling_rate != '':
-                opts = {"res_type": "kaiser_best"}
-                noisy_wav = torch.tensor(librosa.resample(noisy_wav.cpu().numpy(), orig_sr=noisy_sr, target_sr=int(low_pass_sampling_rate), **opts))
-                noisy_sr = int(low_pass_sampling_rate)
-            opts = {"res_type": "kaiser_best"}
-            noisy_wav = librosa.resample(noisy_wav.cpu().numpy(), orig_sr=noisy_sr, target_sr=int(target_sampling_rate), **opts)
-            noisy_sr = int(target_sampling_rate)
+            n_fft_scaled = make_even(n_fft * noisy_sr // sampling_rate)
+            hop_size_scaled = make_even(hop_size * noisy_sr // sampling_rate)
+            win_size_scaled = make_even(win_size * noisy_sr // sampling_rate)
+
+            SE_model = _get_model()
+
+            # 2. Configuración oficial de chunking con solape (Overlap-Add)[cite: 3]
+            chunk_size = int(3.0 * noisy_sr)  # Bloques de 3 segundos
+            hop_length = int(0.5 * chunk_size)  # 50% de solape
+            window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
+
+            Noisy_wav = Noisy_wav.to(device)
+            audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
+            window_sum = torch.zeros_like(Noisy_wav).to(device)
             
-        noisy_wav = torch.FloatTensor(noisy_wav).to(device)
-        n_fft_scaled = make_even(n_fft * noisy_sr // sampling_rate)
-        hop_size_scaled = make_even(hop_size * noisy_sr // sampling_rate)
-        win_size_scaled = make_even(win_size * noisy_sr // sampling_rate)
+            num_chunks = max(1, math.ceil((Noisy_wav.shape[1] - chunk_size) / hop_length) + 1)
 
-        noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
-            noisy_wav,
-            n_fft=n_fft_scaled,
-            hop_size=hop_size_scaled,
-            win_size=win_size_scaled,
-            compress_factor=compress_factor,
-            center=True,
-            addeps=False
-        )
-        amp_g, pha_g, _ = USE_model(noisy_mag, noisy_pha)
-        # To remove "strange sweep artifact"
-        mag = torch.expm1(RELU(amp_g)) # [1, F, T]
-        zero_portion = torch.sum(mag==0, 1)/mag.shape[1]
-        amp_g[:,:,(zero_portion>0.5)[0]] = 0
-        
-        audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, compress_factor)
-        audio_g = pad_or_trim_to_match(noisy_wav.detach(), audio_g, pad_value=1e-8)  # Align lengths using epsilon padding
-        assert audio_g.shape == noisy_wav.shape, audio_g.shape
-        
-        # write file
-        torchaudio.save("enhanced.wav", audio_g.cpu(), noisy_sr)
-        
-        # spectrograms
-        fig, axs = plt.subplots(1, 2, figsize=(16, 4))
+            t_inf = time.time()
+            
+            # 3. Bucle oficial por canales y fragmentos[cite: 3]
+            for c in range(Noisy_wav.shape[0]):
+                noisy_wav = Noisy_wav[c:c+1, :]
+                for i in range(num_chunks):
+                    if i < num_chunks - 1:
+                        noisy_wav_chunk = noisy_wav[:, i * hop_length : i * hop_length + chunk_size]
+                    else:
+                        noisy_wav_chunk = noisy_wav[:, -chunk_size:]
+                    
+                    noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
+                        noisy_wav_chunk,
+                        n_fft=n_fft_scaled,
+                        hop_size=hop_size_scaled,
+                        win_size=win_size_scaled,
+                        compress_factor=compress_factor,
+                        center=True,
+                        addeps=False
+                    )
+                    
+                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
+                    
+                    # Limpieza de artefactos oficial[cite: 3]
+                    mag = torch.expm1(RELU(amp_g))
+                    zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
+                    amp_g[:, :, (zero_portion > 0.5)[0]] = 0
 
-        # noisy
-        D_noisy = librosa.stft(original_noisy_wav[0].cpu().numpy(), n_fft=512, hop_length=256)
-        S_noisy = librosa.amplitude_to_db(np.abs(D_noisy), ref=np.max)
-        librosa.display.specshow(S_noisy, sr=original_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[0], vmax=0)
-        axs[0].set_title("Noisy Spectrogram")
+                    audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, compress_factor)
+                    audio_g = pad_or_trim_to_match(noisy_wav_chunk.detach(), audio_g, pad_value=1e-8)
 
-        # enhanced
-        D_clean = librosa.stft(audio_g.cpu().numpy(), n_fft=512, hop_length=256)
-        S_clean = librosa.amplitude_to_db(np.abs(D_clean), ref=np.max)
-        librosa.display.specshow(S_clean[0], sr=noisy_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[1], vmax=0)
-        axs[1].set_title("Enhanced Spectrogram")
+                    # Acumulación Overlap-Add con ventana de Hann[cite: 3]
+                    if i < num_chunks - 1:
+                        audio_enhanced[c:c+1, i * hop_length : i * hop_length + chunk_size] += audio_g * window[0:audio_g.shape[1]]
+                        window_sum[c:c+1, i * hop_length : i * hop_length + chunk_size] += window[0:audio_g.shape[1]]
+                    else:
+                        audio_enhanced[c:c+1, -chunk_size:] += audio_g * window[0:audio_g.shape[1]]
+                        window_sum[c:c+1, -chunk_size:] += window[0:audio_g.shape[1]]
+                    
+                    torch.cuda.empty_cache()
 
-        plt.tight_layout()
-    return "original.wav", "enhanced.wav", fig
+            # Normalización final dividiendo por la suma de ventanas[cite: 3]
+            audio_enhanced = audio_enhanced / torch.clamp(window_sum, min=1e-7)
+            
+            torch.cuda.synchronize()
+            print(f"[Timer] Inferencia oficial por chunks completada: {time.time() - t_inf:.4f}s", flush=True)
+            assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
+
+            # 4. Guardar únicamente el archivo mejorado en la carpeta output con sufijo único
+            output_dir = "output"
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Extraemos el nombre del archivo original sin la extensión
+            base_name = os.path.splitext(os.path.basename(filepath))[0]
+            enh_filename = f"{base_name}_enhanced.wav"
+            enh_path = os.path.join(output_dir, enh_filename)
+            
+            # Guardamos solo el resultado procesado
+            sf.write(enh_path, audio_enhanced.cpu().numpy().T, noisy_sr)
+
+            # Generación de espectrogramas
+            fig, axs = plt.subplots(1, 2, figsize=(16, 4))
+            D_noisy = librosa.stft(original_noisy_wav[0].cpu().numpy(), n_fft=512, hop_length=256)
+            S_noisy = librosa.amplitude_to_db(np.abs(D_noisy), ref=np.max)
+            librosa.display.specshow(S_noisy, sr=original_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[0], vmax=0)
+            axs[0].set_title("Noisy Spectrogram")
+
+            D_clean = librosa.stft(audio_enhanced[0].cpu().numpy(), n_fft=512, hop_length=256)
+            S_clean = librosa.amplitude_to_db(np.abs(D_clean), ref=np.max)
+            librosa.display.specshow(S_clean, sr=noisy_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[1], vmax=0)
+            axs[1].set_title("Enhanced Spectrogram")
+            plt.tight_layout()
+
+            # Devolvemos la ruta original para el reproductor, la nueva ruta limpia y el gráfico
+            return filepath, enh_path, fig
+
+    except Exception as e:
+        print(f"Error crítico en inferencia: {str(e)}", flush=True)
+        raise e
 
 with gr.Blocks() as demo:
     gr.Markdown(ABOUT)
@@ -145,31 +198,23 @@ with gr.Blocks() as demo:
 
     with gr.Row():
         with gr.Column():
-            # Create Tabs to separate Audio and Video sessions
             with gr.Tabs():
                 with gr.TabItem("Audio Upload"):
-                    # gr.Audio works great for standard audio files
                     input_audio = gr.Audio(label="Input Audio", type="filepath")
                 
                 with gr.TabItem("Video Upload (.mp4, .mov)"):
-                    # gr.File handles .mp4 and .mov without errors
                     input_video = gr.File(label="Input Video", file_types=[".mp4", ".mov"])
 
             target_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for bandwidth extension:")
             low_pass_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:")
     
-            # Helper to unify the input: we use a hidden state to store which one was used
-            active_input = gr.State()
     enhance_btn = gr.Button("Enhance")
     with gr.Row():
         input_audio_player = gr.Audio(label="Original Input Audio", type="filepath")
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     plot_output = gr.Plot(label="Spectrograms")
 
-    # This function determines which input (audio tab or video tab) to send to your model
     def unified_enhance(audio_path, video_path, lp_sr, target_sr):
-        # Determine which path is valid (the one from the active tab)
-        # Note: input_video returns a file object, so we get its .name
         final_path = audio_path if audio_path else video_path
         return enhance(final_path, lp_sr, target_sr)
 

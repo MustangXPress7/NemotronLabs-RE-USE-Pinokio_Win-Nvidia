@@ -1,0 +1,44 @@
+# Pinokio runtime
+.env/
+cache/
+logs/
+output/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Model weights (downloaded at runtime)
+exp/
+*.pth
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*.orig
+
+# Gradio
+.gradio/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Hugging Face cache
+cache/HF_HOME/
+
+# Pinokio specific
+pinokio/logs/
