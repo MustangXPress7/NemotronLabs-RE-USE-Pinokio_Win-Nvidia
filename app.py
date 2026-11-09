@@ -18,31 +18,15 @@ import math
 
 CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
 
-def _install_mamba_pure_python():
-    """Disabled: using custom compiled CUDA kernels."""
-    pass
+from reuse_runtime import (
+    bind_selective_scan_reference,
+    patch_mamba_selective_scan,
+)
 
-try:
-    import sysconfig, pathlib
-    _sp = pathlib.Path(sysconfig.get_paths()['purelib'])
-    _p = _sp / 'mamba_ssm' / 'ops' / 'selective_scan_interface.py'
-    if _p.exists():
-        _s = _p.read_text()
-        _o = 'import selective_scan_cuda\n'
-        _n = 'try:\n    import selective_scan_cuda\nexcept ImportError:\n    selective_scan_cuda = None\n'
-        if _o in _s and 'selective_scan_cuda = None' not in _s:
-            _p.write_text(_s.replace(_o, _n, 1))
-except Exception:
-    pass
-
-_install_mamba_pure_python()
-
-try:
-    import mamba_ssm.ops.selective_scan_interface as _ssi
-    import mamba_ssm.modules.mamba_simple as _ms
-    _ms.selective_scan_fn = _ssi.selective_scan_ref
-except Exception:
-    pass
+# The pinned mamba tag hard-imports the compiled selective_scan_cuda extension.
+# Make that import optional, then route mamba_simple to the reference kernel.
+patch_mamba_selective_scan()
+bind_selective_scan_reference()
 
 ABOUT = """
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
@@ -51,6 +35,13 @@ Upload or record a noisy clip, then click **Enhance** to listen to the result an
 """
 
 import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "RE-USE requires an NVIDIA GPU with a working CUDA 12.8 driver. "
+        "torch.cuda.is_available() is False. Re-run Install or check your NVIDIA driver."
+    )
+
 import torchaudio
 import torch.nn as nn
 import librosa
@@ -198,13 +189,7 @@ with gr.Blocks() as demo:
 
     with gr.Row():
         with gr.Column():
-            with gr.Tabs():
-                with gr.TabItem("Audio Upload"):
-                    input_audio = gr.Audio(label="Input Audio", type="filepath")
-                
-                with gr.TabItem("Video Upload (.mp4, .mov)"):
-                    input_video = gr.File(label="Input Video", file_types=[".mp4", ".mov"])
-
+            input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
             target_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for bandwidth extension:")
             low_pass_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:")
     
@@ -214,14 +199,14 @@ with gr.Blocks() as demo:
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     plot_output = gr.Plot(label="Spectrograms")
 
-    def unified_enhance(audio_path, video_path, lp_sr, target_sr):
-        final_path = audio_path if audio_path else video_path
-        return enhance(final_path, lp_sr, target_sr)
+    def unified_enhance(audio_path, lp_sr, target_sr):
+        return enhance(audio_path, lp_sr, target_sr)
 
     enhance_btn.click(
         fn=unified_enhance,
-        inputs=[input_audio, input_video, low_pass_sampling_rate, target_sampling_rate],
+        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate],
         outputs=[input_audio_player, output_audio, plot_output]
     )
 
-demo.queue().launch(share=True)
+if __name__ == "__main__":
+    demo.queue().launch(share=False)

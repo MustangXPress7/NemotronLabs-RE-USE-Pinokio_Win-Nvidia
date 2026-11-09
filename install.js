@@ -1,16 +1,29 @@
-const path = require('path');
-
 module.exports = {
   requires: {
     bundle: "ai"
   },
   run: [
     {
+      // Fail before downloading anything when the machine cannot run this app.
+      // The app hardcodes CUDA, so a CPU-only install would only crash later.
+      when: "{{gpu !== 'nvidia' || (platform !== 'win32' && platform !== 'linux')}}",
       method: 'shell.run',
       params: {
-        message: 'conda install python=3.10 --yes',
+        message: "echo RE-USE requires an NVIDIA GPU on Windows or Linux. Pinokio detected gpu={{gpu}} platform={{platform}}. See README.md for supported configurations.",
+        on: [{
+          event: "/(RE-USE requires an NVIDIA GPU)/",
+          break: true
+        }]
+      }
+    },
+    {
+      // Creates .env with Python 3.10 on first install, activates it afterwards.
+      method: 'shell.run',
+      params: {
+        message: 'python --version',
         conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env',
+          python: 'python=3.10'
         }
       }
     },
@@ -19,7 +32,7 @@ module.exports = {
       params: {
         message: 'conda install conda-forge::ffmpeg --yes',
         conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env'
         }
       }
     },
@@ -28,7 +41,7 @@ module.exports = {
       params: {
         message: 'python -m pip install --upgrade pip',
         conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env'
         }
       }
     },
@@ -39,6 +52,7 @@ module.exports = {
         params: {
           path: '.',
           venv: null,
+          conda: '.env',
           xformers: false,
           triton: true,
           sageattention: false,
@@ -51,53 +65,60 @@ module.exports = {
       params: {
         message: 'uv pip install -r requirements_full.txt',
         conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env'
         }
       }
     },
     {
-      when: "{{platform === 'win32'}}",
+      // A failed clone can leave a non-empty mamba/ directory behind.
+      // Remove it so the next step can clone cleanly.
+      when: "{{exists('mamba') && !exists('mamba/setup.py')}}",
+      method: 'fs.rm',
+      params: {
+        path: 'mamba',
+        recursive: true,
+        force: true
+      }
+    },
+    {
+      when: "{{!exists('mamba/setup.py')}}",
       method: 'shell.run',
       params: {
-        message: 'git clone https://github.com/Dao-AILab/causal-conv1d.git && cd causal-conv1d && python setup.py install && cd ..',
+        message: 'git clone --branch v2.3.2.post1 --depth 1 https://github.com/state-spaces/mamba.git',
         conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env'
+        }
+      }
+    },
+    {
+      // The pinned tag v2.3.2.post1 reads MAMBA_SKIP_CUDA_BUILD.
+      // Do not add MAMBA_KEEP_CUDA_BUILD here: that flag does not exist in this tag.
+      method: 'shell.run',
+      params: {
+        message: 'uv pip install --no-build-isolation --no-deps .',
+        path: 'mamba',
+        conda: {
+          path: '.env'
         },
         env: {
-          CAUSAL_CONV1D_FORCE_BUILD: 'TRUE',
-          MAX_JOBS: '1'
+          MAMBA_SKIP_CUDA_BUILD: 'TRUE'
         }
       }
     },
     {
-      when: "{{platform === 'win32'}}",
       method: 'shell.run',
       params: {
-        message: 'git clone https://github.com/state-spaces/mamba.git && cd mamba && python setup.py install && cd ..',
+        message: 'python verify_gpu.py',
         conda: {
-          path: path.resolve(__dirname, '.env')
-        },
-        env: {
-          MAMBA_FORCE_BUILD: 'TRUE',
-          MAX_JOBS: '1'
-        }
-      }
-    },
-    {
-      when: "{{platform !== 'win32'}}",
-      method: 'shell.run',
-      params: {
-        message: 'pip install --no-build-isolation --no-deps causal-conv1d mamba-ssm',
-        conda: {
-          path: path.resolve(__dirname, '.env')
+          path: '.env'
         }
       }
     },
     {
       method: 'input',
       params: {
-        title: 'Installation completed',
-        description: 'Return to the dashboard to start RE-USE Speech Enhancement.'
+        title: 'Installation verified',
+        description: 'CUDA is available and the required GPU architectures are present. Return to the dashboard to start RE-USE.'
       }
     }
   ]

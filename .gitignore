@@ -12,6 +12,10 @@ __pycache__/
 exp/
 *.pth
 
+# Build dependencies cloned during install
+causal-conv1d/
+mamba/
+
 # IDE/Editor
 .vscode/
 .idea/

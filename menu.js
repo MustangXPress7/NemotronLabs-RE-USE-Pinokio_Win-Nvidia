@@ -58,6 +58,7 @@ module.exports = async (kernel, info) => {
 		[
 			['fa-solid fa-plug', 'Install', 'install.js'],
 			['fa-solid fa-rotate', 'Reinstall', 'install.js'],
+			['fa-solid fa-microchip', 'Verify GPU', 'verify.js'],
 			['fa-solid fa-arrow-rotate-right', 'Update', 'update.js'],
 			['fa-solid fa-trash', 'Reset', 'reset.js']
 		].forEach(([icon, text, href]) => {
