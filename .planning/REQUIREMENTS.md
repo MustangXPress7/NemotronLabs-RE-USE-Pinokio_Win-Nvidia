@@ -9,7 +9,7 @@ that were never verified.
 
 ### Install reproducibility
 
-- [ ] **INST-01**: A clean install on Windows + NVIDIA completes without manual intervention and creates a working `.env` — **Unverified** (not re-run from a clean state; existing `.env` reused)
+- [x] **INST-01**: A clean install on Windows + NVIDIA completes without manual intervention and creates a working `.env` — **Verified** (executed via Pinokio after reset)
 - [x] **INST-02**: Install scripts are safe to re-run after a partial failure (venv, mamba, torch steps do not corrupt prior state) — **Reasoned** (idempotent guards + incomplete-clone cleanup)
 - [x] **INST-03**: The PyTorch family versions installed together are mutually compatible (`torch`, `torchvision`, `torchaudio`) — **Verified**
 - [x] **INST-04**: Build flags used by `install.js` are honored by the pinned `mamba` revision (no dead environment variables) — **Verified**
@@ -42,7 +42,7 @@ that were never verified.
 
 - [x] **VER-01**: A repeatable verification check confirms CUDA availability, arch coverage, mamba import and app import — **Verified**
 - [x] **VER-02**: A verification report records the executed checks, evidence, and anything still unverified — **Verified**
-- [ ] **VER-03**: The full clean-install → start → inference path is exercised at least once after the final script edits — **Unverified** (start and inference verified; clean install not run)
+- [x] **VER-03**: The full clean-install → start → inference path is exercised at least once after the final script edits — **Verified** (reset + install + verify + inference + app launch)
 
 ## v2 Requirements
 
@@ -65,12 +65,12 @@ that were never verified.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INST-01 | Phase 1 | Unverified |
+| INST-01 | Phase 1 | Verified |
 | INST-02 | Phase 1 | Reasoned |
 | INST-03 | Phase 1 | Verified |
 | INST-04 | Phase 1 | Verified |
 | INST-05 | Phase 1 | Verified |
-| INST-06 | Phase 1 | Verified (static) |
+| INST-06 | Phase 1 | Verified (executed) |
 | GPU-01 | Phase 1 | Verified (Windows) / Reasoned (Linux) |
 | GPU-02 | Phase 1 | Verified |
 | GPU-03 | Phase 1 | Reasoned |
@@ -86,7 +86,7 @@ that were never verified.
 | DOC-04 | Phase 1 | Verified |
 | VER-01 | Phase 1 | Verified |
 | VER-02 | Phase 1 | Verified |
-| VER-03 | Phase 1 | Unverified |
+| VER-03 | Phase 1 | Verified |
 
 **Coverage:**
 - v1 requirements: 22 total

@@ -9,7 +9,7 @@ RTX 4070 while marking Quadro RTX 6000 as reasoned-only.
 
 ## Phases
 
-- [ ] **Phase 1: NVIDIA install and GPU truth** - Audit prior edits, harden install, make NVIDIA CUDA support explicit and verified, fix docs, record learnings
+- [x] **Phase 1: NVIDIA install and GPU truth** - Audit prior edits, harden install, make NVIDIA CUDA support explicit and verified, fix docs, record learnings
 
 ## Phase Details
 
@@ -47,7 +47,7 @@ Phase 1 only.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. NVIDIA install and GPU truth | 5/5 | Verification pending (clean-install run) | - |
+| 1. NVIDIA install and GPU truth | 5/5 | Complete | 2026-11-09 |
 
 **Open item:** Success Criterion 1 is not closed. The new `install.js` has not been run from a
 clean state; the existing `.env` was reused. See

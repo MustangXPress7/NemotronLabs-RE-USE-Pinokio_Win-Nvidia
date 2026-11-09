@@ -91,6 +91,17 @@ module.exports = {
       }
     },
     {
+      // Older versions of this launcher created the conda environment inside
+      // mamba/.env. Remove that stray env so the build uses the project .env.
+      when: "{{exists('mamba/.env')}}",
+      method: 'fs.rm',
+      params: {
+        path: 'mamba/.env',
+        recursive: true,
+        force: true
+      }
+    },
+    {
       // The pinned tag v2.3.2.post1 reads MAMBA_SKIP_CUDA_BUILD.
       // Do not add MAMBA_KEEP_CUDA_BUILD here: that flag does not exist in this tag.
       method: 'shell.run',
@@ -98,7 +109,7 @@ module.exports = {
         message: 'uv pip install --no-build-isolation --no-deps .',
         path: 'mamba',
         conda: {
-          path: '.env'
+          path: '../.env'
         },
         env: {
           MAMBA_SKIP_CUDA_BUILD: 'TRUE'
