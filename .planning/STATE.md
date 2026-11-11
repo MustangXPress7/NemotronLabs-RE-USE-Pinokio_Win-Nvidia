@@ -63,6 +63,8 @@ Progress: [██████████] 100%
 ### Pending Todos
 
 - Run `Install` from a clean state (Reset first) to close INST-01, VER-03, and ROADMAP Criterion 1.
+- Assess GGUF variants from audio-cpp/RE-USE-GGUF (2026-11-12) — research whether GGUF-quantized
+  RE-USE variants can be added to the Hugging Face space clone as additional model variants.
 
 ### Blockers/Concerns
 
