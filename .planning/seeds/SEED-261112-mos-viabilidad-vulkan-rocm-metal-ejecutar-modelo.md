@@ -7,7 +7,7 @@ trigger_when: when relevant
 scope: unknown
 ---
 
-# SEED-261112-mos: viabilidad de usar Vulkan, ROCm o Metal para ejecutar este modelo
+# SEED-261112-mos: viabilidad de usar Vulkan, ROCm, Metal o OpenVINO para ejecutar este modelo
 
 ## Why This Matters
 
@@ -31,9 +31,10 @@ This seed will surface during `/gsd-new-milestone` when the milestone scope matc
 - `pinokio.json:7-8` — `"arch": ["x64"]`, `"gpu": ["nvidia"]`
 - `pinokio.json:6` — `"platform": ["win32", "linux"]`
 - `reuse_runtime.py` — parche de mamba_selective_scan (CUDA-only path)
+- `pinokio.json:6-8` — ninguna referencia a OpenVINO, Intel, Vulkan, ROCm o Metal; solo NVIDIA/CUDA
 
 ## Notes
 
 _Captured via one-shot seed capture. Enrich with trigger, why, and scope at your convenience._
 
-Idea captured: evaluar si es viable portar/adaptar el modelo RE-USE para ejecutarse sobre backends no-CUDA: Vulkan (multiplataforma GPU), ROCm (AMD, Linux) o Metal (Apple Silicon), rompiendo el acoplamiento actual NVIDIA-only.
+Idea captured: evaluar si es viable portar/adaptar el modelo RE-USE para ejecutarse sobre backends no-CUDA: Vulkan (multiplataforma GPU), ROCm (AMD, Linux), Metal (Apple Silicon) o OpenVINO (Intel CPU/iGPU/dGPU), rompiendo el acoplamiento actual NVIDIA-only.
