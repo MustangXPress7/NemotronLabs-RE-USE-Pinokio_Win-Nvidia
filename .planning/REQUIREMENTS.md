@@ -51,6 +51,11 @@ that were never verified.
 - CPU-only inference mode — requires replacing the hardcoded `device = "cuda"`
 - Automated upstream tracking of new mamba/torch releases — useful, not required for correctness
 
+## Phase 2 Requirements
+
+- [x] **GUI-03**: RealTime-only sliders (exit_layer, look_ahead_frames) with variant-dependent enable/disable — **Complete** (Plan 02-03)
+- [x] **RTV-03**: Recipe YAML + model class per variant with RealTime-specific knobs — **Complete** (Plan 02-03)
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -87,6 +92,8 @@ that were never verified.
 | VER-01 | Phase 1 | Verified |
 | VER-02 | Phase 1 | Verified |
 | VER-03 | Phase 1 | Verified |
+| GUI-03 | Phase 2 | Complete |
+| RTV-03 | Phase 2 | Complete |
 
 **Coverage:**
 - v1 requirements: 22 total

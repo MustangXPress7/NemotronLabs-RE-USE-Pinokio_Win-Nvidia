@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Enable RealTime RE-USE variants
 status: complete
-stopped_at: Completed 02-enable-realtime-reuse-variants-02-PLAN.md
-last_updated: "2026-11-12T14:47:09.947Z"
+stopped_at: Completed 02-enable-realtime-reuse-variants-03-PLAN.md
+last_updated: "2026-11-12T14:51:20.639Z"
 last_activity: 2026-11-12
 last_activity_desc: Phase 2 execution started
-state_head: 1f4a4f3fa4ad3309dbc4fb72014255dfa0ee53c8
+state_head: 2bf6a554af29088877dd4cd9d3b59529380bc777
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
   percent: 50
 ---
 
@@ -23,12 +23,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-09)
 
 **Core value:** A clean install on a supported NVIDIA machine produces a working GPU inference environment and a running Gradio app, without hidden manual steps and without documented claims that were never verified.
-**Current focus:** Phase 2 — Wave 2/5 (02-02: Gradio slider conversion + chunk/overlap/window/normalization)
+**Current focus:** Phase 2 — Wave 3/5 (02-03: RealTime-only params exit_layer/look_ahead_frames with variant-dependent enable/disable)
 
 ## Current Position
 
 Phase: 2 of 2 (Enable RealTime RE-USE variants)
-Plan: 2 of 5 in current phase
+Plan: 3 of 5 in current phase
 Status: In Progress - executing Wave 1/5 (02-01: variant registry + RealTime model load)
 Last activity: 2026-11-12 - Phase 2 execution started
 
@@ -60,6 +60,7 @@ Progress: [█████░░░░░] 50%
 |------|----------|-------|-------|
 | Phase 02-enable-realtime-reuse-variants P01 | 25min | 1 tasks | 1 files |
 | Phase 02 P02 | 20min | 1 tasks | 1 files |
+| Phase 02-enable-realtime-reuse-variants P03 | 15min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,10 @@ Progress: [█████░░░░░] 50%
 - [Phase 02]: Window type exposed as gr.Dropdown (categorical Hann/Hamming) rather than gr.Slider
 - [Phase 02]: Normalization scales the window-sum divisor: audio_enhanced / torch.clamp(window_sum * normalization, min=1e-7)
 - [Phase 02]: enhance_btn.click inputs list expanded to 8 entries preserving variant dropdown position
+- [Phase 02-enable-realtime-reuse-variants]: Both RealTime-only sliders start interactive=False since Standard is the default variant
+- [Phase 02-enable-realtime-reuse-variants]: Variant dropdown change event uses gr.update(interactive=(variant == 'RealTime')) to toggle both sliders
+- [Phase 02-enable-realtime-reuse-variants]: enhance() reads exit_layer/look_ahead_frames from function parameters (not registry defaults)
+- [Phase 02-enable-realtime-reuse-variants]: Standard variant calls model(mag, pha) without layer_use/number_ahead; unchanged Phase 1 behavior
 
 ### Pending Todos
 
@@ -111,7 +116,7 @@ Progress: [█████░░░░░] 50%
 
 ## Session Continuity
 
-Last session: 2026-11-12T14:47:02.701Z
-Stopped at: Completed 02-enable-realtime-reuse-variants-02-PLAN.md
+Last session: 2026-11-12T14:51:20.520Z
+Stopped at: Completed 02-enable-realtime-reuse-variants-03-PLAN.md
 Resume file: `.planning/phases/02-enable-realtime-reuse-variants/02-RESEARCH.md`
 Next: `/gsd-execute-phase 02` to execute plans 02-01 through 02-05 in wave order
