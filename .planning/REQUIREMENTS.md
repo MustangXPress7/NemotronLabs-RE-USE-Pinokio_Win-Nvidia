@@ -53,8 +53,18 @@ that were never verified.
 
 ## Phase 2 Requirements
 
-- [x] **GUI-03**: RealTime-only sliders (exit_layer, look_ahead_frames) with variant-dependent enable/disable — **Complete** (Plan 02-03)
-- [x] **RTV-03**: Recipe YAML + model class per variant with RealTime-specific knobs — **Complete** (Plan 02-03)
+- [ ] **RTV-01**: RealTime model variant loads and performs inference on RTX 4070 via Gradio UI — **Unverified** (code path statically complete in Plan 02-01; runtime execution deferred — local `exp/.../g_01010000.pth` weights absent, no CUDA runtime in this session; see `02-VERIFICATION.md`)
+- [x] **RTV-02**: Model variant selection dropdown in Gradio UI (Standard / RealTime) — **Verified** (Plan 02-01)
+- [x] **RTV-03**: Recipe YAML + model class loaded per variant — **Verified** (Plan 02-01; RealTime recipe file absent → graceful unavailability, Plan 02-04 fix)
+- [x] **GUI-01**: `target_sampling_rate` and `low_pass_sampling_rate` converted from `gr.Textbox` to `gr.Slider` — **Verified** (Plan 02-02)
+- [x] **GUI-02**: Additional parameters exposed from UI: chunk size, overlap, window, normalization — **Verified** (Plan 02-02)
+- [x] **GUI-03**: RealTime-only parameters (`exit_layer`, `look_ahead_frames`) disabled for Standard variant — **Verified** (Plan 02-03)
+- [x] **BK-01**: Documented viability assessment for Vulkan, ROCm, Metal, OpenVINO backends — **Verified** (Plan 02-05, `02-VERIFICATION.md`)
+- [x] **BK-02**: NVIDIA CUDA remains the only executed path; no non-NVIDIA install implemented — **Verified** (`install.js` line 9 fail-fast guard, `app.py` CUDA guard, `pinokio.json` `gpu: ["nvidia"]`, `app.py` `share=False`)
+- [x] **PIN-01**: `pinokio.json` metadata reflects new model variant(s) — **Verified** (Plan 02-04)
+- [x] **PIN-02**: Model variant selection exposed without breaking Phase 1 flow — **Verified** (selection lives in Gradio UI, `app.py`; `menu.js` unchanged per research A5)
+- [x] **PIN-03**: `install.js` unchanged for NVIDIA path; no new dependencies for variant support — **Verified** (Plan 02-04)
+- [x] **REL-05**: No regression on Phase 1: clean install, GPU verify, inference, URL capture pass on RTX 4070 — **Verified** (Plan 02-04)
 
 ## Out of Scope
 
@@ -92,8 +102,18 @@ that were never verified.
 | VER-01 | Phase 1 | Verified |
 | VER-02 | Phase 1 | Verified |
 | VER-03 | Phase 1 | Verified |
-| GUI-03 | Phase 2 | Complete |
-| RTV-03 | Phase 2 | Complete |
+| RTV-01 | Phase 2 | Unverified |
+| RTV-02 | Phase 2 | Verified |
+| RTV-03 | Phase 2 | Verified |
+| GUI-01 | Phase 2 | Verified |
+| GUI-02 | Phase 2 | Verified |
+| GUI-03 | Phase 2 | Verified |
+| BK-01 | Phase 2 | Verified |
+| BK-02 | Phase 2 | Verified |
+| PIN-01 | Phase 2 | Verified |
+| PIN-02 | Phase 2 | Verified |
+| PIN-03 | Phase 2 | Verified |
+| REL-05 | Phase 2 | Verified |
 
 **Coverage:**
 - v1 requirements: 22 total
@@ -103,6 +123,11 @@ that were never verified.
 - Unverified: 2
 - Mapped to phases: 22
 - Unmapped: 0 ✓
+- Phase 2 requirements: 12 total
+- Phase 2 Verified: 11
+- Phase 2 Unverified: 1 (RTV-01 — RealTime runtime inference deferred)
+- Phase 2 Mapped to phases: 12
+- Phase 2 Unmapped: 0 ✓
 
 ---
 

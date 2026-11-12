@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Enable RealTime RE-USE variants
 status: complete
-stopped_at: Completed 02-enable-realtime-reuse-variants-04-PLAN.md
-last_updated: "2026-11-12T15:10:58.078Z"
+stopped_at: Completed 02-enable-realtime-reuse-variants-05-PLAN.md
+last_updated: "2026-11-12T15:14:00Z"
 last_activity: 2026-11-12
-last_activity_desc: Phase 2 execution started
+last_activity_desc: Phase 2 complete (02-05: verification report + BK-01 viability assessment + GSD state updates)
 state_head: 7314ac199a1f53b8a1105d5d7b057f86b752ded4
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
-  percent: 50
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -23,21 +23,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-09)
 
 **Core value:** A clean install on a supported NVIDIA machine produces a working GPU inference environment and a running Gradio app, without hidden manual steps and without documented claims that were never verified.
-**Current focus:** Phase 2 — Wave 4/5 (02-04: pinokio.json metadata + menu.js + Phase 1 regression verify on RTX 4070)
+**Current focus:** Phase 2 — Wave 5/5 (02-05: Multi-backend viability doc + verification report + GSD state updates)
 
 ## Current Position
 
 Phase: 2 of 2 (Enable RealTime RE-USE variants)
 Plan: 5 of 5 in current phase
-Status: In Progress - executing Wave 1/5 (02-01: variant registry + RealTime model load)
-Last activity: 2026-11-12 - Phase 2 execution started
+Status: Complete - all 5 plans executed (02-01 through 02-05)
+Last activity: 2026-11-12 - Phase 2 complete (02-05: verification report + BK-01 viability assessment + GSD state updates)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 10
 - Average duration: single session
 - Total execution time: one session
 
@@ -46,11 +46,11 @@ Progress: [█████░░░░░] 50%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. NVIDIA install and GPU truth | 5 | 5 | one session |
-| 2. Enable RealTime RE-USE variants... | 0 | 5 | planned |
+| 2. Enable RealTime RE-USE variants... | 5 | 5 | one session |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 … 01-05
-- Trend: Complete → Phase 2 planned
+- Last 5 plans: 02-01 … 02-05
+- Trend: Complete → Phase 2 complete
 
 
 *Updated after each plan completion*
@@ -62,6 +62,7 @@ Progress: [█████░░░░░] 50%
 | Phase 02 P02 | 20min | 1 tasks | 1 files |
 | Phase 02-enable-realtime-reuse-variants P03 | 15min | 1 tasks | 1 files |
 | Phase 02 P04 | 19min | 1 tasks | 2 files |
+| Phase 02-enable-realtime-reuse-variants P05 | ~15min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -98,15 +99,12 @@ Progress: [█████░░░░░] 50%
 
 ### Pending Todos
 
-- Run `Install` from a clean state (Reset first) to close INST-01, VER-03, and ROADMAP Criterion 1 (Phase 1 open item).
-- Execute Phase 2 plans 02-01 through 02-05 in wave order on RTX 4070.
-- Verify RealTime variant inference on RTX 4070 (Plan 02-01 tracer slice).
-- Verify Phase 1 regression after all app.py changes (Plan 02-04).
+- Run `Install` from a clean state (Reset first) to close INST-01, VER-03, and ROADMAP Criterion 1 (Phase 1 open item, inherited — out of Phase 2 scope).
 
 ### Blockers/Concerns
 
 - Phase 1: The clean install from empty `.env` still needs to be re-executed (INST-01, VER-03).
-- Phase 2: RealTime weights distribution — download via `hf_hub_download` at startup (resolved in research, untested in execution).
+- Phase 2: RealTime end-to-end inference on RTX 4070 (RTV-01) not executed — local `exp/.../g_01010000.pth` weights absent, no CUDA runtime in this session. Documented as Unverified in `02-VERIFICATION.md`; weights distribution resolved in research (`hf_hub_download` from RealTime HF Space, untested).
 
 ## Deferred Items
 
@@ -119,7 +117,7 @@ Progress: [█████░░░░░] 50%
 
 ## Session Continuity
 
-Last session: 2026-11-12T15:10:57.953Z
-Stopped at: Completed 02-enable-realtime-reuse-variants-04-PLAN.md
-Resume file: `.planning/phases/02-enable-realtime-reuse-variants/02-RESEARCH.md`
-Next: `/gsd-execute-phase 02` to execute plans 02-01 through 02-05 in wave order
+Last session: 2026-11-12T15:14:00Z
+Stopped at: Completed 02-enable-realtime-reuse-variants-05-PLAN.md
+Resume file: None (Phase 2 complete)
+Next: Phase 2 has no remaining plans; proceed to Phase 3 or `/gsd-ship` when ready

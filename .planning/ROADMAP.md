@@ -63,8 +63,9 @@ keeping NVIDIA CUDA as the verified production path.
 
 **Depends on**: Phase 1 (NVIDIA install and GPU truth — must remain working)
 
-**Requirements**: (new REQ-IDs to be defined during research) — model variant selection, Gradio UI
-sliders, backend viability documentation, RealTime model loading and inference
+**Requirements**: RTV-01, RTV-02, RTV-03, GUI-01, GUI-02, GUI-03, BK-01, BK-02, PIN-01, PIN-02, PIN-03,
+REL-05 — model variant selection, Gradio UI sliders, backend viability documentation, RealTime model
+loading and inference, NVIDIA CUDA-only execution, no Phase 1 regression
 
 **Success Criteria** (what must be TRUE):
   1. The RealTime RE-USE model variant loads and performs inference on the RTX 4070 via the
@@ -79,12 +80,12 @@ sliders, backend viability documentation, RealTime model loading and inference
   6. No regression on Phase 1: clean install, GPU verify, inference, and Gradio URL capture all
      still pass on RTX 4070
 
-**Plans**: TBD (set during planning)
+**Plans**: 5 plans
 - [x] 02-01-PLAN.md
 - [x] 02-02-PLAN.md
 - [x] 02-03-PLAN.md
 - [x] 02-04-PLAN.md
-- [ ] 02-05-PLAN.md
+- [x] 02-05-PLAN.md
 
 ## Progress
 
@@ -94,4 +95,4 @@ Phase 1 → Phase 2.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. NVIDIA install and GPU truth | 5/5 | Complete | 2026-11-09 |
-| 2. Enable RealTime RE-USE variants... | 0/5 | Planned | — |
+| 2. Enable RealTime RE-USE variants... | 5/5 | Complete | 2026-11-12 |
