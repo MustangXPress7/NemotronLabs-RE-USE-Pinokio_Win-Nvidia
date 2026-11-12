@@ -32,12 +32,15 @@ This seed will surface during `/gsd-new-milestone` when the milestone scope matc
 - `pinokio.json:6` — `"platform": ["win32", "linux"]`
 - `reuse_runtime.py` — parche de mamba_selective_scan (CUDA-only path)
 - `pinokio.json:6-8` — ninguna referencia a OpenVINO, Intel, Vulkan, ROCm o Metal; solo NVIDIA/CUDA
+- `https://huggingface.co/spaces/nvidia/Real-time_RE-USE` — Hugging Face Space de Real-time RE-USE (modelos apuntados y parámetros de referencia)
 
 ## Notes
 
 _Captured via one-shot seed capture. Enrich with trigger, why, and scope at your convenience._
 
 Idea captured: evaluar si es viable portar/adaptar el modelo RE-USE para ejecutarse sobre backends no-CUDA: Vulkan (multiplataforma GPU), ROCm (AMD, Linux), Metal (Apple Silicon) o OpenVINO (Intel CPU/iGPU/dGPU), rompiendo el acoplamiento actual NVIDIA-only.
+
+Usar uno de los modelos apuntados por `https://huggingface.co/spaces/nvidia/Real-time_RE-USE` como base para los tests de viabilidad en cada backend, y añadir más parámetros de evaluación (hardware objetivo, sistema operativo, versión de CUDA/Triton, tamaño de chunk, latencia, memoria GPU, throughput) para comparar el comportamiento entre NVIDIA CUDA y las alternativas Vulkan/ROCm/Metal/OpenVINO.
 
 ## Investigación de referencia (IA)
 
