@@ -10,6 +10,7 @@ RTX 4070 while marking Quadro RTX 6000 as reasoned-only.
 ## Phases
 
 - [x] **Phase 1: NVIDIA install and GPU truth** - Audit prior edits, harden install, make NVIDIA CUDA support explicit and verified, fix docs, record learnings
+- [ ] **Phase 2: Enable RealTime RE-USE variants with user-friendly Gradio UI and multi-backend assessment** - Incorporate SEED-261112-e08 (Gradio sliders for sample rate/chunk/overlap) and SEED-261112-mos (Vulkan/ROCm/Metal/OpenVINO viability), add the RealTime model variant from https://huggingface.co/spaces/nvidia/Real-time_RE-USE while keeping NVIDIA CUDA as the verified production path
 
 ## Phase Details
 
@@ -52,3 +53,45 @@ Phase 1 only.
 **Open item:** Success Criterion 1 is not closed. The new `install.js` has not been run from a
 clean state; the existing `.env` was reused. See
 `.planning/phases/01-nvidia-install-and-gpu-truth/01-VERIFICATION.md` ("Next Step to Close the Phase").
+
+### Phase 2: Enable RealTime RE-USE variants with user-friendly Gradio UI and multi-backend assessment
+
+**Goal**: Enable additional RE-USE model variants (starting with RealTime) in the Pinokio
+launcher, incorporating SEED-261112-e08 (Gradio UI customization with sliders for sample rate,
+chunk size, overlap) and SEED-261112-mos (Vulkan/ROCm/Metal/OpenVINO viability assessment), while
+keeping NVIDIA CUDA as the verified production path.
+
+**Depends on**: Phase 1 (NVIDIA install and GPU truth — must remain working)
+
+**Requirements**: (new REQ-IDs to be defined during research) — model variant selection, Gradio UI
+sliders, backend viability documentation, RealTime model loading and inference
+
+**Success Criteria** (what must be TRUE):
+  1. The RealTime RE-USE model variant loads and performs inference on the RTX 4070 via the
+     launcher's Gradio interface
+  2. `app.py` exposes at least `target_sampling_rate` and `low_pass_sampling_rate` as Gradio
+     sliders (not Textboxes) per SEED-261112-e08
+  3. Additional model parameters (chunk size, overlap, window, normalization) are exposed from
+     the Gradio UI per SEED-261112-e08
+  4. A documented viability assessment covers Vulkan, ROCm, Metal, and OpenVINO backends per
+     SEED-261112-mos, with NVIDIA CUDA remaining the only executed path
+  5. `pinokio.json` metadata reflects the new model variant(s) and any newly supported platforms
+  6. No regression on Phase 1: clean install, GPU verify, inference, and Gradio URL capture all
+     still pass on RTX 4070
+
+**Plans**: TBD (set during planning)
+- [x] 02-01-PLAN.md
+- [ ] 02-02-PLAN.md
+- [ ] 02-03-PLAN.md
+- [ ] 02-04-PLAN.md
+- [ ] 02-05-PLAN.md
+
+## Progress
+
+**Execution Order:**
+Phase 1 → Phase 2.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. NVIDIA install and GPU truth | 5/5 | Complete | 2026-11-09 |
+| 2. Enable RealTime RE-USE variants... | 0/5 | Planned | — |
