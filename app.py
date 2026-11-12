@@ -86,6 +86,36 @@ VARIANT_REGISTRY = {
         "exit_layer_default": 8,
         "look_ahead_frames_default": 0,
     },
+    "laughter": {
+        "label": "Laughter (preserva risa)",
+        "recipe": "recipes/USEMamba_30x1_laughter_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
+        "model_class": "SEMamba",
+        "model_module": "models.generator_SEMamba_time_d4",
+        "weight_source": "hf_hub",
+        "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE-laughter",
+        "chunked": True,
+    },
+    "whisper": {
+        "label": "Whisper (susurro)",
+        "recipe": "recipes/USEMamba_12x1_whisper_lr_00002_norm_05_vq_067_nfft_320_hop_160_NRIR_012_pha_0005_com_04_early_005_release_random_layer_GAN_longer_1k.yaml",
+        "model_class": "SEMamba_decoder_list",
+        "model_module": "models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv",
+        "weight_source": "hf_hub",
+        "weight_repo": "Malfaro43/Realtime-REUSE-whisper-finetune",
+        "chunked": False,
+        "extra_ui_params": ["exit_layer", "look_ahead_frames"],
+        "exit_layer_default": 8,
+        "look_ahead_frames_default": 0,
+    },
+    "bf16": {
+        "label": "BF16 (menor tamaño)",
+        "recipe": "recipes/USEMamba_30x1_bf16_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
+        "model_class": "SEMamba",
+        "model_module": "models.generator_SEMamba_time_d4",
+        "weight_source": "hf_hub",
+        "weight_repo": "giangndm/NVIDIA-NemotronLabs-RE-USE-bf16",
+        "chunked": True,
+    },
 }
 
 # Load full recipe configs per variant (used for model construction + audio params).
@@ -291,7 +321,7 @@ with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
             input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
-            variant_dropdown = gr.Dropdown(label="Model Variant", choices=["Standard", "RealTime"], value="Standard")
+            variant_dropdown = gr.Dropdown(label="Model Variant", choices=["Standard", "RealTime", "Laughter", "Whisper", "BF16"], value="Standard")
             target_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for bandwidth extension:", interactive=True)
             low_pass_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:", interactive=True)
             chunk_size_s = gr.Slider(minimum=1, maximum=10, value=3, step=1, label="Chunk size (seconds)", interactive=True)
@@ -300,18 +330,18 @@ with gr.Blocks() as demo:
             normalization = gr.Slider(minimum=0.0, maximum=1.0, value=1.0, step=0.1, label="Normalization", interactive=True)
             exit_layer_slider = gr.Slider(
                 minimum=3, maximum=12, value=8, step=1,
-                label="Exit layer (RealTime only)", interactive=False
+                label="Exit layer (RealTime/Whisper only)", interactive=False
             )
             look_ahead_frames_slider = gr.Slider(
                 minimum=0, maximum=2, value=0, step=1,
-                label="Look ahead frames (RealTime only)", interactive=False
+                label="Look ahead frames (RealTime/Whisper only)", interactive=False
             )
 
-    # Variant-dependent enable/disable for RealTime-only sliders.
+    # Variant-dependent enable/disable for RealTime/Whisper sliders.
     variant_dropdown.change(
         fn=lambda variant: (
-            gr.update(interactive=(variant == "RealTime")),
-            gr.update(interactive=(variant == "RealTime")),
+            gr.update(interactive=(variant in ("RealTime", "Whisper"))),
+            gr.update(interactive=(variant in ("RealTime", "Whisper"))),
         ),
         inputs=[variant_dropdown],
         outputs=[exit_layer_slider, look_ahead_frames_slider],
