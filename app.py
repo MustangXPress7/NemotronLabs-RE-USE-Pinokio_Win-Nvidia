@@ -10,6 +10,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import importlib
 import spaces
 import gradio as gr
 import soundfile as sf
@@ -28,7 +29,7 @@ from reuse_runtime import (
 patch_mamba_selective_scan()
 bind_selective_scan_reference()
 
-ABOUT = """
+ABOUT = """\
 # RE-USE: A universal speech enhancement model for diverse degradations, sampling rates, and languages.
 Upload or record a noisy clip, then click **Enhance** to listen to the result and view its spectrogram.
 (ref: https://huggingface.co/spaces/rc19477/Speech_Enhancement_Mamba)
@@ -48,7 +49,6 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 from models.stfts import mag_phase_stft, mag_phase_istft
-from models.generator_SEMamba_time_d4 import SEMamba
 from utils.util import load_config, pad_or_trim_to_match
 from huggingface_hub import hf_hub_download
 
@@ -59,24 +59,78 @@ def make_even(value):
     return value if value % 2 == 0 else value + 1
 
 device = "cuda"
-cfg1 = load_config('recipes/USEMamba_30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml')
+
+# ---------------------------------------------------------------------------
+# Model variant registry (Phase 2 tracer slice)
+# Maps variant id -> recipe YAML, model class/module, weight source, etc.
+# ---------------------------------------------------------------------------
+VARIANT_REGISTRY = {
+    "standard": {
+        "label": "Standard",
+        "recipe": "recipes/USEMamba_30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
+        "model_class": "SEMamba",
+        "model_module": "models.generator_SEMamba_time_d4",
+        "weight_source": "hf_hub",
+        "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE",
+        "chunked": True,
+    },
+    "realtime": {
+        "label": "RealTime",
+        "recipe": "recipes/USEMamba_12x1_lr_00002_norm_05_vq_067_nfft_320_hop_160_NRIR_012_pha_0005_com_04_early_005_release_random_layer_GAN_longer_1k.yaml",
+        "model_class": "SEMamba_decoder_list",
+        "model_module": "models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv",
+        "weight_source": "local_pth",
+        "weight_path": "exp/12x1_lr_00002_norm_05_vq_065_nfft_320_hop_160_NRIR_012_pha_0005_com_04_peak_release_random_layer_ahead_sep_conv2/g_01010000.pth",
+        "chunked": False,
+        "extra_ui_params": ["exit_layer", "look_ahead_frames"],
+        "exit_layer_default": 8,
+        "look_ahead_frames_default": 0,
+    },
+}
+
+# Load full recipe configs per variant (used for model construction + audio params).
+# The Standard variant keeps the original `cfg1` name/shape for full backward
+# compatibility with the Phase 1 `from_pretrained(cfg=cfg1)` call path.
+_VARIANT_FULL_CFG = {}
+for _vid, _entry in VARIANT_REGISTRY.items():
+    _VARIANT_FULL_CFG[_vid] = load_config(_entry["recipe"])
+
+cfg1 = _VARIANT_FULL_CFG["standard"]
 n_fft, hop_size, win_size = cfg1['stft_cfg']['n_fft'], cfg1['stft_cfg']['hop_size'], cfg1['stft_cfg']['win_size']
 compress_factor = cfg1['model_cfg']['compress_factor']
 sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
-_USE_MODEL = None
+_USE_MODELS = {}
 
-def _get_model():
-    global _USE_MODEL
-    if _USE_MODEL is None:
-        print("Loading model (first time, may take a while)...", flush=True)
-        _USE_MODEL = SEMamba.from_pretrained("nvidia/NVIDIA-NemotronLabs-RE-USE", cfg=cfg1).to(device)
-        _USE_MODEL.eval()
-        print("Model loaded.", flush=True)
-    return _USE_MODEL
+def _get_model(variant_id):
+    """Load and cache a model per variant id.
+
+    Looks up VARIANT_REGISTRY, loads the recipe YAML, dynamically imports the
+    model class module, instantiates the class, loads weights per source
+    (from_pretrained for standard, torch.load for realtime), calls .to(device)
+    and .eval(), and caches per variant id.
+    """
+    if variant_id not in _USE_MODELS:
+        entry = VARIANT_REGISTRY[variant_id]
+        cfg = _VARIANT_FULL_CFG[variant_id]
+        print(f"Loading {variant_id} model (first time, may take a while)...", flush=True)
+        mod = importlib.import_module(entry["model_module"])
+        model_class = getattr(mod, entry["model_class"])
+        if entry["weight_source"] == "hf_hub":
+            model = model_class.from_pretrained(entry.get("weight_repo", "nvidia/NVIDIA-NemotronLabs-RE-USE"), cfg=cfg).to(device)
+        elif entry["weight_source"] == "local_pth":
+            model = model_class(cfg).to(device)
+            state = torch.load(entry["weight_path"], map_location=device)
+            model.load_state_dict(state)
+        else:
+            raise ValueError(f"Unknown weight_source: {entry['weight_source']}")
+        model.eval()
+        _USE_MODELS[variant_id] = model
+        print(f"{variant_id} model loaded.", flush=True)
+    return _USE_MODELS[variant_id]
 
 @spaces.GPU
-def enhance(filepath, lp_sr, target_sr):
+def enhance(filepath, lp_sr, target_sr, variant_id="standard"):
     try:
         with torch.no_grad():
             # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
@@ -85,80 +139,116 @@ def enhance(filepath, lp_sr, target_sr):
             original_noisy_wav = Noisy_wav.clone()
             original_sr = noisy_sr
 
-            n_fft_scaled = make_even(n_fft * noisy_sr // sampling_rate)
-            hop_size_scaled = make_even(hop_size * noisy_sr // sampling_rate)
-            win_size_scaled = make_even(win_size * noisy_sr // sampling_rate)
+            entry = VARIANT_REGISTRY[variant_id]
+            cfg = _VARIANT_FULL_CFG[variant_id]
+            v_n_fft = cfg['stft_cfg']['n_fft']
+            v_hop_size = cfg['stft_cfg']['hop_size']
+            v_win_size = cfg['stft_cfg']['win_size']
+            v_compress_factor = cfg['model_cfg']['compress_factor']
+            v_sampling_rate = cfg['stft_cfg']['sampling_rate']
 
-            SE_model = _get_model()
+            n_fft_scaled = make_even(v_n_fft * noisy_sr // v_sampling_rate)
+            hop_size_scaled = make_even(v_hop_size * noisy_sr // v_sampling_rate)
+            win_size_scaled = make_even(v_win_size * noisy_sr // v_sampling_rate)
 
-            # 2. Configuración oficial de chunking con solape (Overlap-Add)[cite: 3]
-            chunk_size = int(3.0 * noisy_sr)  # Bloques de 3 segundos
-            hop_length = int(0.5 * chunk_size)  # 50% de solape
-            window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
+            SE_model = _get_model(variant_id)
 
-            Noisy_wav = Noisy_wav.to(device)
-            audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
-            window_sum = torch.zeros_like(Noisy_wav).to(device)
-            
-            num_chunks = max(1, math.ceil((Noisy_wav.shape[1] - chunk_size) / hop_length) + 1)
+            exit_layer = entry.get("exit_layer_default", 8)
+            look_ahead_frames = entry.get("look_ahead_frames_default", 0)
 
-            t_inf = time.time()
-            
-            # 3. Bucle oficial por canales y fragmentos[cite: 3]
-            for c in range(Noisy_wav.shape[0]):
-                noisy_wav = Noisy_wav[c:c+1, :]
-                for i in range(num_chunks):
-                    if i < num_chunks - 1:
-                        noisy_wav_chunk = noisy_wav[:, i * hop_length : i * hop_length + chunk_size]
-                    else:
-                        noisy_wav_chunk = noisy_wav[:, -chunk_size:]
-                    
-                    noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
-                        noisy_wav_chunk,
-                        n_fft=n_fft_scaled,
-                        hop_size=hop_size_scaled,
-                        win_size=win_size_scaled,
-                        compress_factor=compress_factor,
-                        center=True,
-                        addeps=False
-                    )
-                    
-                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
-                    
-                    # Limpieza de artefactos oficial[cite: 3]
-                    mag = torch.expm1(RELU(amp_g))
-                    zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
-                    amp_g[:, :, (zero_portion > 0.5)[0]] = 0
+            # 2. Configuración de chunking: Standard usa overlap-add; RealTime pasa single-pass
+            if entry.get("chunked", True):
+                chunk_size = int(3.0 * noisy_sr)  # Bloques de 3 segundos
+                hop_length = int(0.5 * chunk_size)  # 50% de solape
+                window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
 
-                    audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, compress_factor)
-                    audio_g = pad_or_trim_to_match(noisy_wav_chunk.detach(), audio_g, pad_value=1e-8)
+                Noisy_wav = Noisy_wav.to(device)
+                audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
+                window_sum = torch.zeros_like(Noisy_wav).to(device)
 
-                    # Acumulación Overlap-Add con ventana de Hann[cite: 3]
-                    if i < num_chunks - 1:
-                        audio_enhanced[c:c+1, i * hop_length : i * hop_length + chunk_size] += audio_g * window[0:audio_g.shape[1]]
-                        window_sum[c:c+1, i * hop_length : i * hop_length + chunk_size] += window[0:audio_g.shape[1]]
-                    else:
-                        audio_enhanced[c:c+1, -chunk_size:] += audio_g * window[0:audio_g.shape[1]]
-                        window_sum[c:c+1, -chunk_size:] += window[0:audio_g.shape[1]]
-                    
-                    torch.cuda.empty_cache()
+                num_chunks = max(1, math.ceil((Noisy_wav.shape[1] - chunk_size) / hop_length) + 1)
 
-            # Normalización final dividiendo por la suma de ventanas[cite: 3]
-            audio_enhanced = audio_enhanced / torch.clamp(window_sum, min=1e-7)
-            
-            torch.cuda.synchronize()
-            print(f"[Timer] Inferencia oficial por chunks completada: {time.time() - t_inf:.4f}s", flush=True)
-            assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
+                t_inf = time.time()
+
+                # 3. Bucle por canales y fragmentos
+                for c in range(Noisy_wav.shape[0]):
+                    noisy_wav = Noisy_wav[c:c+1, :]
+                    for i in range(num_chunks):
+                        if i < num_chunks - 1:
+                            noisy_wav_chunk = noisy_wav[:, i * hop_length : i * hop_length + chunk_size]
+                        else:
+                            noisy_wav_chunk = noisy_wav[:, -chunk_size:]
+
+                        noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
+                            noisy_wav_chunk,
+                            n_fft=n_fft_scaled,
+                            hop_size=hop_size_scaled,
+                            win_size=win_size_scaled,
+                            compress_factor=v_compress_factor,
+                            center=True,
+                            addeps=False
+                        )
+
+                        if variant_id == "realtime":
+                            amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                        else:
+                            amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
+
+                        # Limpieza de artefactos
+                        mag = torch.expm1(RELU(amp_g))
+                        zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
+                        amp_g[:, :, (zero_portion > 0.5)[0]] = 0
+
+                        audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
+                        audio_g = pad_or_trim_to_match(noisy_wav_chunk.detach(), audio_g, pad_value=1e-8)
+
+                        # Acumulación Overlap-Add con ventana de Hann
+                        if i < num_chunks - 1:
+                            audio_enhanced[c:c+1, i * hop_length : i * hop_length + chunk_size] += audio_g * window[0:audio_g.shape[1]]
+                            window_sum[c:c+1, i * hop_length : i * hop_length + chunk_size] += window[0:audio_g.shape[1]]
+                        else:
+                            audio_enhanced[c:c+1, -chunk_size:] += audio_g * window[0:audio_g.shape[1]]
+                            window_sum[c:c+1, -chunk_size:] += window[0:audio_g.shape[1]]
+
+                        torch.cuda.empty_cache()
+
+                # Normalización final dividiendo por la suma de ventanas
+                audio_enhanced = audio_enhanced / torch.clamp(window_sum, min=1e-7)
+
+                torch.cuda.synchronize()
+                print(f"[Timer] Inferencia por chunks completada: {time.time() - t_inf:.4f}s", flush=True)
+                assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
+            else:
+                # Single-pass RealTime inference (no chunking)
+                Noisy_wav = Noisy_wav.to(device)
+                noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
+                    Noisy_wav,
+                    n_fft=n_fft_scaled,
+                    hop_size=hop_size_scaled,
+                    win_size=win_size_scaled,
+                    compress_factor=v_compress_factor,
+                    center=True,
+                    addeps=False
+                )
+                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                mag = torch.expm1(RELU(amp_g))
+                zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
+                amp_g[:, :, (zero_portion > 0.5)[0]] = 0
+                audio_enhanced = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
+                audio_enhanced = pad_or_trim_to_match(Noisy_wav.detach(), audio_enhanced, pad_value=1e-8)
+                torch.cuda.synchronize()
+                print(f"[Timer] Inferencia single-pass completada", flush=True)
+                assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
 
             # 4. Guardar únicamente el archivo mejorado en la carpeta output con sufijo único
             output_dir = "output"
             os.makedirs(output_dir, exist_ok=True)
-            
+
             # Extraemos el nombre del archivo original sin la extensión
             base_name = os.path.splitext(os.path.basename(filepath))[0]
             enh_filename = f"{base_name}_enhanced.wav"
             enh_path = os.path.join(output_dir, enh_filename)
-            
+
             # Guardamos solo el resultado procesado
             sf.write(enh_path, audio_enhanced.cpu().numpy().T, noisy_sr)
 
@@ -190,21 +280,22 @@ with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
             input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
+            variant_dropdown = gr.Dropdown(label="Model Variant", choices=["Standard", "RealTime"], value="Standard")
             target_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for bandwidth extension:")
             low_pass_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:")
-    
+
     enhance_btn = gr.Button("Enhance")
     with gr.Row():
         input_audio_player = gr.Audio(label="Original Input Audio", type="filepath")
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     plot_output = gr.Plot(label="Spectrograms")
 
-    def unified_enhance(audio_path, lp_sr, target_sr):
-        return enhance(audio_path, lp_sr, target_sr)
+    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard"):
+        return enhance(audio_path, lp_sr, target_sr, variant_id)
 
     enhance_btn.click(
         fn=unified_enhance,
-        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate],
+        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown],
         outputs=[input_audio_player, output_audio, plot_output]
     )
 
