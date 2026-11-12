@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Enable RealTime RE-USE variants
 status: complete
-stopped_at: Completed 02-enable-realtime-reuse-variants-03-PLAN.md
-last_updated: "2026-11-12T14:51:20.639Z"
+stopped_at: Completed 02-enable-realtime-reuse-variants-04-PLAN.md
+last_updated: "2026-11-12T15:10:58.078Z"
 last_activity: 2026-11-12
 last_activity_desc: Phase 2 execution started
-state_head: 2bf6a554af29088877dd4cd9d3b59529380bc777
+state_head: 7314ac199a1f53b8a1105d5d7b057f86b752ded4
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 50
 ---
 
@@ -23,12 +23,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-09)
 
 **Core value:** A clean install on a supported NVIDIA machine produces a working GPU inference environment and a running Gradio app, without hidden manual steps and without documented claims that were never verified.
-**Current focus:** Phase 2 — Wave 3/5 (02-03: RealTime-only params exit_layer/look_ahead_frames with variant-dependent enable/disable)
+**Current focus:** Phase 2 — Wave 4/5 (02-04: pinokio.json metadata + menu.js + Phase 1 regression verify on RTX 4070)
 
 ## Current Position
 
 Phase: 2 of 2 (Enable RealTime RE-USE variants)
-Plan: 3 of 5 in current phase
+Plan: 5 of 5 in current phase
 Status: In Progress - executing Wave 1/5 (02-01: variant registry + RealTime model load)
 Last activity: 2026-11-12 - Phase 2 execution started
 
@@ -61,6 +61,7 @@ Progress: [█████░░░░░] 50%
 | Phase 02-enable-realtime-reuse-variants P01 | 25min | 1 tasks | 1 files |
 | Phase 02 P02 | 20min | 1 tasks | 1 files |
 | Phase 02-enable-realtime-reuse-variants P03 | 15min | 1 tasks | 1 files |
+| Phase 02 P04 | 19min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,8 @@ Progress: [█████░░░░░] 50%
 - [Phase 02-enable-realtime-reuse-variants]: Variant dropdown change event uses gr.update(interactive=(variant == 'RealTime')) to toggle both sliders
 - [Phase 02-enable-realtime-reuse-variants]: enhance() reads exit_layer/look_ahead_frames from function parameters (not registry defaults)
 - [Phase 02-enable-realtime-reuse-variants]: Standard variant calls model(mag, pha) without layer_use/number_ahead; unchanged Phase 1 behavior
+- [Phase 02]: Homepage points to the Real-Time RE-USE Space as the variant reference; repository link stays https://github.com/NVIDIA/RE-USE
+- [Phase 02]: No menu.js or install.js changes: variant selection lives in app.py's Gradio dropdown; install stays NVIDIA-only
 
 ### Pending Todos
 
@@ -116,7 +119,7 @@ Progress: [█████░░░░░] 50%
 
 ## Session Continuity
 
-Last session: 2026-11-12T14:51:20.520Z
-Stopped at: Completed 02-enable-realtime-reuse-variants-03-PLAN.md
+Last session: 2026-11-12T15:10:57.953Z
+Stopped at: Completed 02-enable-realtime-reuse-variants-04-PLAN.md
 Resume file: `.planning/phases/02-enable-realtime-reuse-variants/02-RESEARCH.md`
 Next: `/gsd-execute-phase 02` to execute plans 02-01 through 02-05 in wave order

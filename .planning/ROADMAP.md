@@ -83,7 +83,7 @@ sliders, backend viability documentation, RealTime model loading and inference
 - [x] 02-01-PLAN.md
 - [x] 02-02-PLAN.md
 - [x] 02-03-PLAN.md
-- [ ] 02-04-PLAN.md
+- [x] 02-04-PLAN.md
 - [ ] 02-05-PLAN.md
 
 ## Progress
