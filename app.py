@@ -65,17 +65,40 @@ device = "cuda"
 # Maps variant id -> recipe YAML, model class/module, weight source, etc.
 # ---------------------------------------------------------------------------
 VARIANT_REGISTRY = {
+    # --- Gama Standard (30 bloques Mamba, inferencia chunked) ---
     "standard": {
-        "label": "Standard",
+        "label": "Standard (30 bloques)",
         "recipe": "recipes/USEMamba_30x1_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
         "model_class": "SEMamba",
         "model_module": "models.generator_SEMamba_time_d4",
         "weight_source": "hf_hub",
         "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE",
         "chunked": True,
+        "family": "standard",
     },
+    "laughter": {
+        "label": "Laughter · preserva risa (30 bloques)",
+        "recipe": "recipes/USEMamba_30x1_laughter_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
+        "model_class": "SEMamba",
+        "model_module": "models.generator_SEMamba_time_d4",
+        "weight_source": "hf_hub",
+        "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE-laughter",
+        "chunked": True,
+        "family": "standard",
+    },
+    "bf16": {
+        "label": "BF16 · menor tamaño (30 bloques)",
+        "recipe": "recipes/USEMamba_30x1_bf16_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
+        "model_class": "SEMamba",
+        "model_module": "models.generator_SEMamba_time_d4",
+        "weight_source": "hf_hub",
+        "weight_repo": "giangndm/NVIDIA-NemotronLabs-RE-USE-bf16",
+        "chunked": True,
+        "family": "standard",
+    },
+    # --- Gama RealTime (12 bloques Mamba, inferencia single-pass) ---
     "realtime": {
-        "label": "RealTime",
+        "label": "RealTime · baja latencia (12 bloques)",
         "recipe": "recipes/USEMamba_12x1_lr_00002_norm_05_vq_067_nfft_320_hop_160_NRIR_012_pha_0005_com_04_early_005_release_random_layer_GAN_longer_1k.yaml",
         "model_class": "SEMamba_decoder_list",
         "model_module": "models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv",
@@ -85,18 +108,10 @@ VARIANT_REGISTRY = {
         "extra_ui_params": ["exit_layer", "look_ahead_frames"],
         "exit_layer_default": 8,
         "look_ahead_frames_default": 0,
-    },
-    "laughter": {
-        "label": "Laughter (preserva risa)",
-        "recipe": "recipes/USEMamba_30x1_laughter_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
-        "model_class": "SEMamba",
-        "model_module": "models.generator_SEMamba_time_d4",
-        "weight_source": "hf_hub",
-        "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE-laughter",
-        "chunked": True,
+        "family": "realtime",
     },
     "whisper": {
-        "label": "Whisper (susurro)",
+        "label": "Whisper · susurro (12 bloques)",
         "recipe": "recipes/USEMamba_12x1_whisper_lr_00002_norm_05_vq_067_nfft_320_hop_160_NRIR_012_pha_0005_com_04_early_005_release_random_layer_GAN_longer_1k.yaml",
         "model_class": "SEMamba_decoder_list",
         "model_module": "models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv",
@@ -106,17 +121,13 @@ VARIANT_REGISTRY = {
         "extra_ui_params": ["exit_layer", "look_ahead_frames"],
         "exit_layer_default": 8,
         "look_ahead_frames_default": 0,
-    },
-    "bf16": {
-        "label": "BF16 (menor tamaño)",
-        "recipe": "recipes/USEMamba_30x1_bf16_lr_00002_norm_05_vq_065_nfft_320_hop_40_NRIR_012_pha_0005_com_04_early_001.yaml",
-        "model_class": "SEMamba",
-        "model_module": "models.generator_SEMamba_time_d4",
-        "weight_source": "hf_hub",
-        "weight_repo": "giangndm/NVIDIA-NemotronLabs-RE-USE-bf16",
-        "chunked": True,
+        "family": "realtime",
     },
 }
+
+# Mapa de etiquetas del dropdown de Gradio -> IDs de VARIANT_REGISTRY.
+# Gradio pasa la etiqueta completa del elemento seleccionado, no la clave interna.
+VARIANT_LABEL_TO_ID = {entry["label"]: vid for vid, entry in VARIANT_REGISTRY.items()}
 
 # Load full recipe configs per variant (used for model construction + audio params).
 # The Standard variant keeps the original `cfg1` name/shape for full backward
@@ -168,6 +179,10 @@ def _get_model(variant_id):
 @spaces.GPU
 def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
     try:
+        # Gradio pasa la etiqueta completa del dropdown; convertirla al ID interno del registro.
+        if variant_id in VARIANT_LABEL_TO_ID:
+            variant_id = VARIANT_LABEL_TO_ID[variant_id]
+
         with torch.no_grad():
             # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
             _data, noisy_sr = sf.read(filepath, dtype='float32', always_2d=True)
@@ -321,9 +336,19 @@ with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
             input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
-            variant_dropdown = gr.Dropdown(label="Model Variant", choices=["Standard", "RealTime", "Laughter", "Whisper", "BF16"], value="Standard")
-            target_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for bandwidth extension:", interactive=True)
-            low_pass_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:", interactive=True)
+            variant_dropdown = gr.Dropdown(
+                label="Model Variant",
+                choices=[
+                    "Standard (30 bloques)",
+                    "Laughter · preserva risa (30 bloques)",
+                    "BF16 · menor tamaño (30 bloques)",
+                    "RealTime · baja latencia (12 bloques)",
+                    "Whisper · susurro (12 bloques)",
+                ],
+                value="Standard (30 bloques)",
+            )
+            target_sampling_rate = gr.Slider(minimum=0, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for bandwidth extension (0 = off):", interactive=True)
+            low_pass_sampling_rate = gr.Slider(minimum=0, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension (0 = off):", interactive=True)
             chunk_size_s = gr.Slider(minimum=1, maximum=10, value=3, step=1, label="Chunk size (seconds)", interactive=True)
             overlap_portion = gr.Slider(minimum=0.0, maximum=0.9, value=0.5, step=0.1, label="Overlap portion", interactive=True)
             window_type = gr.Dropdown(choices=["Hann", "Hamming"], value="Hann", label="Window type", interactive=True)
