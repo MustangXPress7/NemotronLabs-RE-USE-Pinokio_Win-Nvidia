@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Enable RealTime RE-USE variants
 status: complete
-stopped_at: Completed 02-enable-realtime-reuse-variants-01-PLAN.md
-last_updated: "2026-11-12T14:40:37.885Z"
+stopped_at: Completed 02-enable-realtime-reuse-variants-02-PLAN.md
+last_updated: "2026-11-12T14:47:09.947Z"
 last_activity: 2026-11-12
 last_activity_desc: Phase 2 execution started
-state_head: 103a1cbc365c0c9944d1291fd341d58858008552
+state_head: 1f4a4f3fa4ad3309dbc4fb72014255dfa0ee53c8
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 10
-  completed_plans: 6
+  completed_plans: 7
   percent: 50
 ---
 
@@ -23,12 +23,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-09)
 
 **Core value:** A clean install on a supported NVIDIA machine produces a working GPU inference environment and a running Gradio app, without hidden manual steps and without documented claims that were never verified.
-**Current focus:** Phase 2 — Enable RealTime RE-USE variants with user-friendly Gradio UI and multi-backend assessment (planned, ready to execute)
+**Current focus:** Phase 2 — Wave 2/5 (02-02: Gradio slider conversion + chunk/overlap/window/normalization)
 
 ## Current Position
 
 Phase: 2 of 2 (Enable RealTime RE-USE variants)
-Plan: 1 of 5 in current phase
+Plan: 2 of 5 in current phase
 Status: In Progress - executing Wave 1/5 (02-01: variant registry + RealTime model load)
 Last activity: 2026-11-12 - Phase 2 execution started
 
@@ -59,6 +59,7 @@ Progress: [█████░░░░░] 50%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 02-enable-realtime-reuse-variants P01 | 25min | 1 tasks | 1 files |
+| Phase 02 P02 | 20min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,10 @@ Progress: [█████░░░░░] 50%
 - [Phase 02-enable-realtime-reuse-variants]: Keep device='cuda' and share=False untouched (Phase 1 guards D-01/D-24 preserved)
 - [Phase 02-enable-realtime-reuse-variants]: RealTime weights load via torch.load from local exp/.../g_01010000.pth (not from_pretrained Hub)
 - [Phase 02-enable-realtime-reuse-variants]: Standard path unchanged: SEMamba + hop_40 recipe + from_pretrained nvidia/NVIDIA-NemotronLabs-RE-USE
+- [Phase 02]: Slider value 0 used as sentinel meaning 'off/disabled' for optional sample rates (sliders never return empty string)
+- [Phase 02]: Window type exposed as gr.Dropdown (categorical Hann/Hamming) rather than gr.Slider
+- [Phase 02]: Normalization scales the window-sum divisor: audio_enhanced / torch.clamp(window_sum * normalization, min=1e-7)
+- [Phase 02]: enhance_btn.click inputs list expanded to 8 entries preserving variant dropdown position
 
 ### Pending Todos
 
@@ -106,7 +111,7 @@ Progress: [█████░░░░░] 50%
 
 ## Session Continuity
 
-Last session: 2026-11-12T14:40:28.725Z
-Stopped at: Completed 02-enable-realtime-reuse-variants-01-PLAN.md
+Last session: 2026-11-12T14:47:02.701Z
+Stopped at: Completed 02-enable-realtime-reuse-variants-02-PLAN.md
 Resume file: `.planning/phases/02-enable-realtime-reuse-variants/02-RESEARCH.md`
 Next: `/gsd-execute-phase 02` to execute plans 02-01 through 02-05 in wave order
