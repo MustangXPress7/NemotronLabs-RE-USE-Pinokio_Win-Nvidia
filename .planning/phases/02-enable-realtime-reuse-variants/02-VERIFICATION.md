@@ -177,11 +177,23 @@ realtime model loaded.
 - Output: `output/test_rt_app_enhanced.wav`, 16000 frames, 16000 Hz sample rate
 - `device = "cuda"` preserved, CUDA guard intact
 
+### Additional variant inference on RTX 4070 (RTV-04, RTV-05, RTV-06)
+
+Executed `app.enhance('test_variants.wav', '', '', variant_id=<variant>, exit_layer=8, look_ahead_frames=0)` for each new variant:
+
+| Variant | Model repo | Output file | Frames | Sample rate | Status |
+|---------|-----------|-------------|--------|-------------|--------|
+| Whisper | Malfaro43/Realtime-REUSE-whisper-finetune | `output/test_variants_enhanced.wav` | 16000 | 16000 Hz | ✓ Verified |
+| Laughter | nvidia/NVIDIA-NemotronLabs-RE-USE-laughter | `output/test_variants_enhanced.wav` | 16000 | 16000 Hz | ✓ Verified |
+| BF16 | giangndm/NVIDIA-NemotronLabs-RE-USE-bf16 | `output/test_variants_enhanced.wav` | 16000 | 16000 Hz | ✓ Verified |
+
+All 3 variants loaded successfully via `from_pretrained()` and produced enhanced WAV output on RTX 4070.
+
 ### Per-plan evidence
 
 | Plan | Deliverable | Commit | Evidence |
 |------|-------------|--------|----------|
-| 02-01 | VARIANT_REGISTRY + Model Variant dropdown + RealTime model load + inference | `103a1cb` | `app.py` static: registry, `gr.Dropdown`, `SEMamba_decoder_list`, `torch.load`, `g_01010000.pth`, `share=False`, `device="cuda"`; runtime verified: `app.enhance()` with `variant_id='realtime'` → 16000-frame WAV output on RTX 4070 |
+| 02-01 | VARIANT_REGISTRY + Model Variant dropdown + RealTime model load + inference | `103a1cb` + `f79e9f8` | `app.py` static: registry (5 variants: Standard, RealTime, Laughter, Whisper, BF16), `gr.Dropdown`, `SEMamba_decoder_list`, `torch.load`, `share=False`, `device="cuda"`; runtime verified: RealTime (16k-frame WAV), Whisper (16k-frame WAV), Laughter (16k-frame WAV), BF16 (16k-frame WAV) all on RTX 4070 |
 | 02-02 | `gr.Slider` sample rates + chunk/overlap/window/normalization | `1f4a4f3` | `app.py`: 5 sliders, 0 `gr.Textbox`, 0 `!= ''` guards, 8-entry `enhance_btn.click` inputs |
 | 02-03 | `exit_layer`/`look_ahead_frames` sliders, variant-dependent enable/disable | `2bf6a55` | `app.py`: 2 sliders `interactive=False`, dropdown change handler `gr.update(interactive=(variant == "RealTime"))`, 10-entry inputs |
 | 02-04 | `pinokio.json` tags + Phase 1 regression on RTX 4070 | `7314ac1` | executed `verify_gpu.py` (ok), `app.py` (local URL, `share=False`), `verify_inference.py` (48,000 frames) |
@@ -191,7 +203,7 @@ realtime model loaded.
 | Requirement | Status | Evidence / note |
 |-------------|--------|-----------------|
 | RTV-01 | ✓ Verified | RealTime model loads via `from_pretrained("nvidia/Real-time_RE-USE", cfg=cfg)` and performs single-pass inference on RTX 4070 — executed `app.enhance('test_rt_app.wav', '', '', variant_id='realtime', exit_layer=8, look_ahead_frames=0)`, 16000-frame WAV output produced |
-| RTV-02 | ✓ Verified | `gr.Dropdown(label="Model Variant", choices=["Standard","RealTime"], value="Standard")` present in `app.py` |
+| RTV-02 | ✓ Verified | `gr.Dropdown(label="Model Variant", choices=["Standard","RealTime","Laughter","Whisper","BF16"], value="Standard")` present in `app.py` |
 | RTV-03 | ✓ Verified | `VARIANT_REGISTRY` maps standard/realtime → recipe YAML, model class, weight source; RealTime recipe file absent → graceful unavailability (plan 04 deviation fix) |
 | GUI-01 | ✓ Verified | `target_sampling_rate` / `low_pass_sampling_rate` are `gr.Slider(8000-48000, default 0)` |
 | GUI-02 | ✓ Verified | Chunk size (1-10s), overlap (0.0-0.9), window (Hann/Hamming), normalization (0.0-1.0) sliders wired into `enhance()` |
@@ -202,8 +214,11 @@ realtime model loaded.
 | PIN-02 | ✓ Verified | Variant selection exposed in Gradio UI (`app.py`); `menu.js` unchanged (`mode: 'Default'`), Phase 1 flow unbroken (research A5) |
 | PIN-03 | ✓ Verified | `install.js` unchanged: NVIDIA fail-fast guard, `torch.js` cu128 delegation, no new package lines |
 | REL-05 | ✓ Verified | Phase 1 regression executed on RTX 4070: `verify_gpu.py` ok (sm_75 + sm_86), `app.py` local URL `share=False`, Standard enhance → 48,000-frame WAV |
+| RTV-04 | ✓ Verified | Whisper variant loads via `from_pretrained("Malfaro43/Realtime-REUSE-whisper-finetune", cfg=cfg)` and performs single-pass inference on RTX 4070 — 16,000-frame WAV output |
+| RTV-05 | ✓ Verified | Laughter variant loads via `from_pretrained("nvidia/NVIDIA-NemotronLabs-RE-USE-laughter", cfg=cfg)` and performs chunked inference on RTX 4070 — 16,000-frame WAV output |
+| RTV-06 | ✓ Verified | BF16 variant loads via `from_pretrained("giangndm/NVIDIA-NemotronLabs-RE-USE-bf16", cfg=cfg)` and performs chunked inference on RTX 4070 — 16,000-frame WAV output |
 
-**Coverage:** 12/12 Phase 2 requirements covered; 12 Verified, 0 Unverified (BK-02 verified with a reasoned note that the fail-fast screen was not observed on non-NVIDIA hardware — same treatment as Phase 1 GPU-03).
+**Coverage:** 15/15 Phase 2 requirements covered; 15 Verified, 0 Unverified (BK-02 verified with a reasoned note that the fail-fast screen was not observed on non-NVIDIA hardware — same treatment as Phase 1 GPU-03).
 
 ## Multi-Backend Viability Assessment (BK-01)
 

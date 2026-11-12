@@ -310,25 +310,31 @@ Document feasibility in RESEARCH.md and ROADMAP.md only. Do not add install bran
 
 ### Variant Comparison (Verified from Source)
 
-| Attribute | Standard RE-USE | RealTime RE-USE | Source |
-|-----------|-----------------|-----------------|--------|
-| Model class | `SEMamba` | `SEMamba_decoder_list` | [VERIFIED: local app.py line 51; RealTime app.py import] |
-| Model module | `models.generator_SEMamba_time_d4` | `models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv` | [VERIFIED: local app.py line 51; RealTime app.py import] |
-| TFMamba blocks | 30 (`num_tfmamba: 30`) | 12 (`num_tfmamba: 12`) | [VERIFIED: recipe YAMLs] |
-| STFT hop_size | 40 | 160 | [VERIFIED: recipe YAMLs] |
-| STFT n_fft | 320 | 320 | [VERIFIED: recipe YAMLs] |
-| STFT win_size | 320 | 320 | [VERIFIED: recipe YAMLs] |
-| Sampling rate | 8000 Hz | 8000 Hz | [VERIFIED: recipe YAMLs] |
-| Weight source | `nvidia/NVIDIA-NemotronLabs-RE-USE` via `from_pretrained` | Local `exp/.../g_01010000.pth` via `torch.load` | [VERIFIED: local app.py line 73; RealTime app.py lines ~70-74] |
-| Extra inference params | None | `exit_layer` (3–12), `look_ahead_frames` (0–2) | [VERIFIED: RealTime app.py `enhance()` signature] |
-| Video upload tab | Yes (broken, soundfile can't demux) | Yes (broken, same) | [VERIFIED: both app.py files] |
-| Chunked inference | Yes (3s chunks, 50% overlap) | No chunking (single forward) | [VERIFIED: local app.py lines 95-144; RealTime app.py no chunk loop] |
+| Variant | Model class | Model module | TFMamba blocks | STFT hop | Chunked | Weight source (HF Hub repo) | Extra UI params |
+|---------|-------------|--------------|----------------|----------|---------|------------------------------|-----------------|
+| Standard | `SEMamba` | `models.generator_SEMamba_time_d4` | 30 | 40 | Yes (3s, 50%) | `nvidia/NVIDIA-NemotronLabs-RE-USE` | None |
+| RealTime | `SEMamba_decoder_list` | `models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv` | 12 | 160 | No (single-pass) | `nvidia/Real-time_RE-USE` | `exit_layer` (3–12), `look_ahead_frames` (0–2) |
+| Laughter | `SEMamba` | `models.generator_SEMamba_time_d4` | 30 | 40 | Yes (3s, 50%) | `nvidia/NVIDIA-NemotronLabs-RE-USE-laughter` | None |
+| Whisper | `SEMamba_decoder_list` | `models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv` | 12 | 160 | No (single-pass) | `Malfaro43/Realtime-REUSE-whisper-finetune` | `exit_layer` (3–12), `look_ahead_frames` (0–2) |
+| BF16 | `SEMamba` | `models.generator_SEMamba_time_d4` | 30 | 40 | Yes (3s, 50%) | `giangndm/NVIDIA-NemotronLabs-RE-USE-bf16` | None |
+
+**Notes:** All variants run on NVIDIA CUDA via PyTorch + mamba-ssm. Laughter preserves laughter better during enhancement (9.6M params). Whisper is fine-tuned for whispered speech + ASR pipelines (13.5M params). BF16 uses BF16 storage for smaller disk footprint (21.1 MB vs 38.6 MB, 9.6M params).
 
 ### Recommended Variant Registry Design
 
 A single registry in `app.py` maps variant ID to config, model class, and weight source. `enhance()` looks up the variant once at the top, then proceeds with the shared inference pipeline. This avoids scattered if/else chains.
 
-The RealTime variant does **not** use chunked inference (single forward pass), while Standard uses chunked overlap-add. The variant registry should also carry a `chunked` flag so `enhance()` can branch on inference strategy, not on model class directly.
+The RealTime and Whisper variants do **not** use chunked inference (single forward pass), while Standard, Laughter, and BF16 use chunked overlap-add. The variant registry carries a `chunked` flag so `enhance()` can branch on inference strategy, not on model class directly.
+
+**Current registry entries (5 variants):**
+
+| Variant | Recipe YAML | Model class | Weight source | HF Hub repo | Chunked | Extra UI params |
+|---------|-------------|-------------|---------------|-------------|---------|-----------------|
+| standard | `recipes/USEMamba_30x1_...hop_40_...yaml` | `SEMamba` | `hf_hub` | `nvidia/NVIDIA-NemotronLabs-RE-USE` | Yes | None |
+| realtime | `recipes/USEMamba_12x1_...hop_160_...yaml` | `SEMamba_decoder_list` | `hf_hub` | `nvidia/Real-time_RE-USE` | No | `exit_layer`, `look_ahead_frames` |
+| laughter | `recipes/USEMamba_30x1_laughter_...hop_40_...yaml` | `SEMamba` | `hf_hub` | `nvidia/NVIDIA-NemotronLabs-RE-USE-laughter` | Yes | None |
+| whisper | `recipes/USEMamba_12x1_whisper_...hop_160_...yaml` | `SEMamba_decoder_list` | `hf_hub` | `Malfaro43/Realtime-REUSE-whisper-finetune` | No | `exit_layer`, `look_ahead_frames` |
+| bf16 | `recipes/USEMamba_30x1_bf16_...hop_40_...yaml` | `SEMamba` | `hf_hub` | `giangndm/NVIDIA-NemotronLabs-RE-USE-bf16` | Yes | None |
 
 ### Shared Inference Pipeline
 
@@ -350,17 +356,18 @@ Divergence points:
 
 | File | Change Required | What Stays Same |
 |------|----------------|-----------------|
-| `app.py` | Add variant dropdown (`gr.Dropdown`), convert sample-rate Textboxes to Sliders, add chunk/overlap/window/normalization sliders, add exit_layer/look_ahead_frames for RealTime, variant registry, variant-aware `enhance()` | `device = "cuda"`, CUDA guard, mamba patch calls, `demo.queue().launch(share=False)`, spectrogram output, enhance button |
+| `app.py` | Add variant dropdown (`gr.Dropdown`) with 5 variants (Standard, RealTime, Laughter, Whisper, BF16), convert sample-rate Textboxes to Sliders, add chunk/overlap/window/normalization sliders, add exit_layer/look_ahead_frames for RealTime+Whisper, variant registry (5 entries), variant-aware `enhance()` | `device = "cuda"`, CUDA guard, mamba patch calls, `demo.queue().launch(share=False)`, spectrogram output, enhance button |
 | `install.js` | None (NVIDIA path unchanged) | All steps: conda `.env`, ffmpeg, torch.js delegation, mamba clone/build, `verify_gpu.py` |
 | `torch.js` | None | cu128 torch/torchaudio/torchvision install; triton optional |
 | `run.js` | None | `python app.py`, URL capture via `/(http:\/\/[0-9.:]+)/` → `local.set url` |
 | `menu.js` | Possibly add variant-aware run mode params | Install/Run/Verify/Update/Reset menu structure |
-| `pinokio.json` | Add model variant tags (e.g. `"tags": [..., "realtime", "model-variants"]`) | `platform`, `arch`, `gpu: ["nvidia"]`, `version`, `title`, `description` |
+| `pinokio.json` | Add model variant tags (e.g. `"tags": [..., "realtime", "laughter", "whisper", "bf16", "model-variants"]`) | `platform`, `arch`, `gpu: ["nvidia"]`, `version`, `title`, `description` |
 | `pinokio.js` | None | Menu wiring via `require(__dirname + '/menu.js')` |
 | `verify_gpu.py` | None | CUDA/arch/mamba checks unchanged |
 | `reuse_runtime.py` | None | Pure-Python mamba selective-scan patch unchanged |
 | `reset.js` | None | Removes `.env`, `cache`, `mamba`, `causal-conv1d` |
 | `requirements_full.txt` | None | No new Python packages needed for variants |
+| `recipes/` | 3 new recipe YAMLs added (laughter, whisper, bf16) | Existing Standard and RealTime recipes unchanged |
 
 ### `pinokio.json` Metadata Additions (Recommended)
 
