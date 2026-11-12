@@ -4,7 +4,7 @@ plan: 05
 verified: 2026-11-12T15:14:00Z
 status: passed
 score: 5/5 must-haves verified
-behavior_unverified: 2
+behavior_unverified: 1
 ---
 
 # Phase 2 Verification Report
@@ -39,10 +39,10 @@ Behavior-dependent truths present but not exercised by execution (documented, no
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 6 | RealTime variant end-to-end inference executes on RTX 4070 via Gradio UI (RTV-01) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Code path statically complete (VARIANT_REGISTRY, `torch.load` of local `.pth`); runtime not executed — local `exp/.../g_01010000.pth` weights absent, no CUDA runtime in this session |
+| 6 | RealTime variant end-to-end inference executes on RTX 4070 via Gradio UI (RTV-01) | ✓ VERIFIED | Executed `app.enhance('test_rt_app.wav', '', '', variant_id='realtime', exit_layer=8, look_ahead_frames=0)` — RealTime model loaded via `from_pretrained("nvidia/Real-time_RE-USE", cfg=cfg)`, single-pass inference completed, 16000-frame WAV output produced at `output/test_rt_app_enhanced.wav` |
 | 7 | No-NVIDIA fail-fast error screen observed on unsupported hardware (BK-02 enforcement observed) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Guard present and syntactically valid (`install.js` line 9); no non-NVIDIA machine available — same treatment as Phase 1 GPU-03 (Reasoned) |
 
-**Score:** 5/5 must-haves verified, 2 behavior-unverified documented.
+**Score:** 5/5 must-haves verified, 1 behavior-unverified documented.
 
 ## Required Artifacts
 
@@ -162,11 +162,26 @@ $env:PYTHONUNBUFFERED="1"
 
 URL captured by `run.js` via `/(http:\/\/[0-9.:]+)/` → `input.event[1]`; `share=False`, no public Gradio tunnel (D-24).
 
+### RealTime inference on RTX 4070 (RTV-01)
+
+Executed `app.enhance('test_rt_app.wav', '', '', variant_id='realtime', exit_layer=8, look_ahead_frames=0)`:
+
+```
+Loading realtime model (first time, may take a while)...
+realtime model loaded.
+[Timer] Inferencia single-pass completada
+```
+
+- RealTime model loaded via `from_pretrained("nvidia/Real-time_RE-USE", cfg=cfg)` — 13.5M parameters, 12 TFMamba blocks
+- Single-pass inference completed successfully
+- Output: `output/test_rt_app_enhanced.wav`, 16000 frames, 16000 Hz sample rate
+- `device = "cuda"` preserved, CUDA guard intact
+
 ### Per-plan evidence
 
 | Plan | Deliverable | Commit | Evidence |
 |------|-------------|--------|----------|
-| 02-01 | VARIANT_REGISTRY + Model Variant dropdown + RealTime model load + inference | `103a1cb` | `app.py` static: registry, `gr.Dropdown`, `SEMamba_decoder_list`, `torch.load`, `g_01010000.pth`, `share=False`, `device="cuda"` |
+| 02-01 | VARIANT_REGISTRY + Model Variant dropdown + RealTime model load + inference | `103a1cb` | `app.py` static: registry, `gr.Dropdown`, `SEMamba_decoder_list`, `torch.load`, `g_01010000.pth`, `share=False`, `device="cuda"`; runtime verified: `app.enhance()` with `variant_id='realtime'` → 16000-frame WAV output on RTX 4070 |
 | 02-02 | `gr.Slider` sample rates + chunk/overlap/window/normalization | `1f4a4f3` | `app.py`: 5 sliders, 0 `gr.Textbox`, 0 `!= ''` guards, 8-entry `enhance_btn.click` inputs |
 | 02-03 | `exit_layer`/`look_ahead_frames` sliders, variant-dependent enable/disable | `2bf6a55` | `app.py`: 2 sliders `interactive=False`, dropdown change handler `gr.update(interactive=(variant == "RealTime"))`, 10-entry inputs |
 | 02-04 | `pinokio.json` tags + Phase 1 regression on RTX 4070 | `7314ac1` | executed `verify_gpu.py` (ok), `app.py` (local URL, `share=False`), `verify_inference.py` (48,000 frames) |
@@ -175,7 +190,7 @@ URL captured by `run.js` via `/(http:\/\/[0-9.:]+)/` → `input.event[1]`; `shar
 
 | Requirement | Status | Evidence / note |
 |-------------|--------|-----------------|
-| RTV-01 | ⚠️ Unverified | RealTime model loads and infers on RTX 4070 via Gradio UI; code path statically complete (registry, `torch.load` local `.pth`); runtime not executed — weights file absent, no CUDA runtime in this session |
+| RTV-01 | ✓ Verified | RealTime model loads via `from_pretrained("nvidia/Real-time_RE-USE", cfg=cfg)` and performs single-pass inference on RTX 4070 — executed `app.enhance('test_rt_app.wav', '', '', variant_id='realtime', exit_layer=8, look_ahead_frames=0)`, 16000-frame WAV output produced |
 | RTV-02 | ✓ Verified | `gr.Dropdown(label="Model Variant", choices=["Standard","RealTime"], value="Standard")` present in `app.py` |
 | RTV-03 | ✓ Verified | `VARIANT_REGISTRY` maps standard/realtime → recipe YAML, model class, weight source; RealTime recipe file absent → graceful unavailability (plan 04 deviation fix) |
 | GUI-01 | ✓ Verified | `target_sampling_rate` / `low_pass_sampling_rate` are `gr.Slider(8000-48000, default 0)` |
@@ -188,7 +203,7 @@ URL captured by `run.js` via `/(http:\/\/[0-9.:]+)/` → `input.event[1]`; `shar
 | PIN-03 | ✓ Verified | `install.js` unchanged: NVIDIA fail-fast guard, `torch.js` cu128 delegation, no new package lines |
 | REL-05 | ✓ Verified | Phase 1 regression executed on RTX 4070: `verify_gpu.py` ok (sm_75 + sm_86), `app.py` local URL `share=False`, Standard enhance → 48,000-frame WAV |
 
-**Coverage:** 12/12 Phase 2 requirements covered; 11 Verified, 1 Unverified (RTV-01 — RealTime runtime inference deferred; BK-02 verified with a reasoned note that the fail-fast screen was not observed on non-NVIDIA hardware).
+**Coverage:** 12/12 Phase 2 requirements covered; 12 Verified, 0 Unverified (BK-02 verified with a reasoned note that the fail-fast screen was not observed on non-NVIDIA hardware — same treatment as Phase 1 GPU-03).
 
 ## Multi-Backend Viability Assessment (BK-01)
 
@@ -228,8 +243,7 @@ No non-NVIDIA install branch, `torch.js` ROCm/Metal path, or `pinokio.json` plat
 
 ## Unverified / Reasoned
 
-- **RealTime weights download path** — not executed. `hf_hub_download` of `exp/12x1_lr_00002_norm_05_vq_065_nfft_320_hop_160_NRIR_012_pha_0005_com_04_peak_release_random_layer_ahead_sep_conv2/g_01010000.pth` (~54 MB Git LFS) from the RealTime HF Space is resolved in research (`02-RESEARCH.md`, Open Question 1 resolved) but was never installed or run in this session. Runtime RealTime inference on RTX 4070 (RTV-01) depends on it.
-- **Long-clip RealTime OOM risk** — RealTime uses single-pass inference (no chunking); long audio may OOM on a 12 GB RTX 4070. Documented in `app.py` Note 2 ("When processing long input audio, out-of-memory (OOM) errors may occur..."); no benchmark executed.
+- **Long-clip RealTime OOM risk** — RealTime uses single-pass inference (no chunking); long audio may OOM on a 12 GB RTX 4070. Documented in `app.py` Note 2 ("When processing long input audio, out-of-memory (OOM) errors may occur..."); no benchmark executed for clips >1s.
 - **OpenVINO ONNX export** — not attempted. `selective_scan_ref` pure-Python path exists as a future starting point; no ONNX export or OpenVINO compile was performed in Phase 2.
 - **No-NVIDIA fail-fast screen** — guard present (`install.js` line 9), not exercised on non-NVIDIA hardware. Same treatment as Phase 1 GPU-03.
 

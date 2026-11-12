@@ -390,21 +390,15 @@ The run button currently passes `mode: 'Default'` to `run.js` [VERIFIED: menu.js
 | Model card claims NVIDIA Ampere/A100 support; RTX 4070 (Ada) is binary-compatible via `sm_86` but not explicitly tested for RealTime | Low | Medium | Verify RealTime inference on RTX 4070 during Phase 2 execution |
 | RealTime Space `demo.queue().launch(share=True)` — local copy uses `share=False` per Phase 1 D-24 | Low | Low | Keep `share=False` |
 
-### Open Questions
+### Open Questions (RESOLVED)
 
-1. **[RealTime weights distribution]** Should the launcher download `exp/.../g_01010000.pth` (~54 MB, Git LFS) from the RealTime HF Space at install time, or require the user to manually place it? The RealTime app.py references a relative local path.
-   - What we know: File exists at RealTime Space `exp/12x1_.../g_01010000.pth` [VERIFIED: HF Space file listing].
-   - What's unclear: Whether Pinokio install script should fetch it via `hf_hub_download` or `script.download`.
-   - Recommendation: Add `hf_hub_download` call in `app.py` at startup if local file missing, or add install.js step.
+1. **[RealTime weights distribution] RESOLVED: Download at install via `hf_hub_download`.** The launcher downloads `exp/12x1_lr_00002_norm_05_vq_065_nfft_320_hop_160_NRIR_012_pha_0005_com_04_peak_release_random_layer_ahead_sep_conv2/g_01010000.pth` (~54 MB, Git LFS) from the RealTime HF Space at startup if the local `exp/` file is missing, using `hf_hub_download(repo_id="nvidia/Real-time_RE-USE", filename=...)`. File exists at RealTime Space `exp/12x1_.../g_01010000.pth` [VERIFIED: HF Space file listing]. Implemented in Plan 01 `app.py` startup check.
 
-2. **[Slider value type migration]** `enhance()` currently does `int(target_sampling_rate)` and `target_sampling_rate != ''`. Sliders return float. Should default be `0` (meaning "disabled") or `8000` (minimum valid)?
-   - Recommendation: Use `0` as "off/disabled" sentinel; change guards to `if target_sampling_rate and target_sampling_rate > 0`.
+2. **[Slider value type migration] RESOLVED: Use `0` sentinel meaning "off/disabled".** `enhance()` guards change from `target_sampling_rate != ''` to `if target_sampling_rate is not None and target_sampling_rate > 0`. Sliders return float (never empty string), so `0` means "bandwidth extension off". Implemented in Plan 02 `app.py`.
 
-3. **[Variant selection UI placement]** Should the variant dropdown be at the top of the Gradio UI (affecting which sliders show) or should all sliders show with RealTime-only ones disabled for Standard?
-   - Recommendation: Show all sliders always, but disable `exit_layer`/`look_ahead_frames` when Standard is selected; simpler Gradio logic than conditional visibility.
+3. **[Variant selection UI placement] RESOLVED: Show all sliders always, disable RealTime-only ones for Standard.** Simpler Gradio logic than conditional visibility. All sliders render; `exit_layer`/`look_ahead_frames` start `interactive=False` (Standard default) and toggle via variant dropdown change event. Implemented in Plan 03 `app.py`.
 
-4. **[OpenVINO future phase]** If a later phase pursues OpenVINO, should it reuse `reuse_runtime.py`'s pure-Python `selective_scan_ref` as the ONNX export starting point?
-   - Recommendation: Yes — `reuse_runtime.py` already routes mamba to `selective_scan_ref` [VERIFIED: local reuse_runtime.py lines 45-54].
+4. **[OpenVINO future phase] RESOLVED: Yes, reuse `reuse_runtime.py`'s pure-Python `selective_scan_ref`.** The existing `selective_scan_ref` path already routes mamba_ssm to a CUDA-independent reference kernel [VERIFIED: local reuse_runtime.py lines 45-54]. Documented as the ONNX export starting point for any future OpenVINO phase; not executed in Phase 2.
 
 ## State of the Art
 
@@ -428,13 +422,6 @@ The run button currently passes `mode: 'Default'` to `run.js` [VERIFIED: menu.js
 | A3 | RealTime variant's lack of chunking is acceptable for typical clip lengths (<10s) on RTX 4070 12 GB | Risks | OOM on long clips; may need to backport chunking to RealTime |
 | A4 | No new Python packages needed beyond Phase 1 stack for variant support | Pinokio Integration | If RealTime needs additional deps (e.g., different torchaudio version), install.js may need changes |
 | A5 | `menu.js` does not need changes; variant selection happens entirely in Gradio UI | Pinokio Integration | If user wants variant pre-selection before launch, menu.js + run.js need mode params |
-
-## Open Questions
-
-1. **[RealTime weights distribution]** Download `g_01010000.pth` at install vs. require manual placement? (see Risks #1)
-2. **[Slider default for "disabled"]** Use `0` sentinel or minimum valid value `8000`? (see Risks #2)
-3. **[Slider visibility model]** Show-all-with-disable vs. conditional visibility for RealTime-only params? (see Open Question #3)
-4. **[OpenVINO export starting point]** Confirm `selective_scan_ref` pure-Python path is sufficient for ONNX export? (see Open Question #4)
 
 ## Environment Availability
 
