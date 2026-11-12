@@ -93,8 +93,14 @@ VARIANT_REGISTRY = {
 # compatibility with the Phase 1 `from_pretrained(cfg=cfg1)` call path.
 _VARIANT_FULL_CFG = {}
 for _vid, _entry in VARIANT_REGISTRY.items():
-    _VARIANT_FULL_CFG[_vid] = load_config(_entry["recipe"])
+    recipe_path = _entry["recipe"]
+    if os.path.exists(recipe_path):
+        _VARIANT_FULL_CFG[_vid] = load_config(recipe_path)
+    else:
+        print(f"Warning: recipe config '{recipe_path}' for variant '{_vid}' not found on disk; variant '{_vid}' will be unavailable until the recipe file is added.", flush=True)
 
+if "standard" not in _VARIANT_FULL_CFG:
+    raise SystemExit("Standard variant recipe config is missing; cannot start RE-USE.")
 cfg1 = _VARIANT_FULL_CFG["standard"]
 n_fft, hop_size, win_size = cfg1['stft_cfg']['n_fft'], cfg1['stft_cfg']['hop_size'], cfg1['stft_cfg']['win_size']
 compress_factor = cfg1['model_cfg']['compress_factor']
@@ -140,6 +146,11 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             original_sr = noisy_sr
 
             entry = VARIANT_REGISTRY[variant_id]
+            if variant_id not in _VARIANT_FULL_CFG:
+                raise ValueError(
+                    f"Variant '{variant_id}' is not available: recipe config '{entry['recipe']}' "
+                    "is missing on disk. Add the recipe YAML or select the Standard variant."
+                )
             cfg = _VARIANT_FULL_CFG[variant_id]
             v_n_fft = cfg['stft_cfg']['n_fft']
             v_hop_size = cfg['stft_cfg']['hop_size']

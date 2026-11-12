@@ -7,8 +7,8 @@
   "arch": ["x64"],
   "gpu": ["nvidia"],
   "categories": ["audio", "ai", "speech-enhancement"],
-  "tags": ["gradio", "mamba", "speech", "enhancement", "nvidia", "cuda"],
+  "tags": ["gradio", "mamba", "speech", "enhancement", "nvidia", "cuda", "model-variants", "realtime"],
   "license": "custom",
-  "homepage": "https://huggingface.co/spaces/nvidia/RE-USE",
+  "homepage": "https://huggingface.co/spaces/nvidia/Real-time_RE-USE",
   "repository": "https://github.com/NVIDIA/RE-USE"
 }
