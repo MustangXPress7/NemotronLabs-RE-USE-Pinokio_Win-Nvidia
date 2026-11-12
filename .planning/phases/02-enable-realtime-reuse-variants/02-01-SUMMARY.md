@@ -125,6 +125,14 @@ None - no external service configuration required.
 - Ready for Plan 02-02 (slider conversions, RealTime-only params, UI expansion)
 - Runtime RealTime inference on RTX 4070 still needs weights file + GPU execution
 
+## Self-Check: PASSED
+
+- `app.py` exists: FOUND
+- `.planning/phases/02-enable-realtime-reuse-variants/02-01-SUMMARY.md` exists: FOUND
+- Task commit `103a1cbc365c0c9944d1291fd341d58858008552` is ancestor of HEAD: YES
+- Python syntax check (`ast.parse`): exits 0
+- All acceptance-criteria strings present in app.py: VARIANT_REGISTRY, gr.Dropdown, SEMamba_decoder_list, torch.load, from_pretrained, g_01010000.pth, share=False, device="cuda"
+
 ---
 *Phase: 02-enable-realtime-reuse-variants*
 *Completed: 2026-11-12*
