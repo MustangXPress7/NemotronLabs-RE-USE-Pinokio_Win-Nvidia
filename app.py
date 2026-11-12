@@ -130,7 +130,7 @@ def _get_model(variant_id):
     return _USE_MODELS[variant_id]
 
 @spaces.GPU
-def enhance(filepath, lp_sr, target_sr, variant_id="standard"):
+def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0):
     try:
         with torch.no_grad():
             # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
@@ -158,9 +158,12 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard"):
 
             # 2. Configuración de chunking: Standard usa overlap-add; RealTime pasa single-pass
             if entry.get("chunked", True):
-                chunk_size = int(3.0 * noisy_sr)  # Bloques de 3 segundos
-                hop_length = int(0.5 * chunk_size)  # 50% de solape
-                window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
+                chunk_size = int(chunk_size_s * noisy_sr)  # slider-driven chunk size
+                hop_length = int(overlap_portion * chunk_size)  # slider-driven overlap
+                if window_type == "Hamming":
+                    window = torch.clamp(torch.hamming_window(chunk_size).to(device), min=1e-7)
+                else:
+                    window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
 
                 Noisy_wav = Noisy_wav.to(device)
                 audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
@@ -213,7 +216,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard"):
                         torch.cuda.empty_cache()
 
                 # Normalización final dividiendo por la suma de ventanas
-                audio_enhanced = audio_enhanced / torch.clamp(window_sum, min=1e-7)
+                audio_enhanced = audio_enhanced / torch.clamp(window_sum * normalization, min=1e-7)
 
                 torch.cuda.synchronize()
                 print(f"[Timer] Inferencia por chunks completada: {time.time() - t_inf:.4f}s", flush=True)
@@ -281,8 +284,12 @@ with gr.Blocks() as demo:
         with gr.Column():
             input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
             variant_dropdown = gr.Dropdown(label="Model Variant", choices=["Standard", "RealTime"], value="Standard")
-            target_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for bandwidth extension:")
-            low_pass_sampling_rate = gr.Textbox(label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:")
+            target_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for bandwidth extension:", interactive=True)
+            low_pass_sampling_rate = gr.Slider(minimum=8000, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension:", interactive=True)
+            chunk_size_s = gr.Slider(minimum=1, maximum=10, value=3, step=1, label="Chunk size (seconds)", interactive=True)
+            overlap_portion = gr.Slider(minimum=0.0, maximum=0.9, value=0.5, step=0.1, label="Overlap portion", interactive=True)
+            window_type = gr.Dropdown(choices=["Hann", "Hamming"], value="Hann", label="Window type", interactive=True)
+            normalization = gr.Slider(minimum=0.0, maximum=1.0, value=1.0, step=0.1, label="Normalization", interactive=True)
 
     enhance_btn = gr.Button("Enhance")
     with gr.Row():
@@ -290,12 +297,12 @@ with gr.Blocks() as demo:
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     plot_output = gr.Plot(label="Spectrograms")
 
-    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard"):
-        return enhance(audio_path, lp_sr, target_sr, variant_id)
+    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0):
+        return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization)
 
     enhance_btn.click(
         fn=unified_enhance,
-        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown],
+        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization],
         outputs=[input_audio_player, output_audio, plot_output]
     )
 
