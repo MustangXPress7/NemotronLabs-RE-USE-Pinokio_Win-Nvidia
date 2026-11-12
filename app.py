@@ -363,10 +363,12 @@ with gr.Blocks() as demo:
             )
 
     # Variant-dependent enable/disable for RealTime/Whisper sliders.
+    # Gradio passes the full dropdown label; resolve it to the internal variant ID
+    # via VARIANT_LABEL_TO_ID and check the family flag.
     variant_dropdown.change(
         fn=lambda variant: (
-            gr.update(interactive=(variant in ("RealTime", "Whisper"))),
-            gr.update(interactive=(variant in ("RealTime", "Whisper"))),
+            gr.update(interactive=VARIANT_LABEL_TO_ID.get(variant, "standard") in ("realtime", "whisper")),
+            gr.update(interactive=VARIANT_LABEL_TO_ID.get(variant, "standard") in ("realtime", "whisper")),
         ),
         inputs=[variant_dropdown],
         outputs=[exit_layer_slider, look_ahead_frames_slider],
