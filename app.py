@@ -130,7 +130,7 @@ def _get_model(variant_id):
     return _USE_MODELS[variant_id]
 
 @spaces.GPU
-def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0):
+def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
     try:
         with torch.no_grad():
             # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
@@ -152,9 +152,6 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             win_size_scaled = make_even(v_win_size * noisy_sr // v_sampling_rate)
 
             SE_model = _get_model(variant_id)
-
-            exit_layer = entry.get("exit_layer_default", 8)
-            look_ahead_frames = entry.get("look_ahead_frames_default", 0)
 
             # 2. Configuración de chunking: Standard usa overlap-add; RealTime pasa single-pass
             if entry.get("chunked", True):
@@ -290,6 +287,24 @@ with gr.Blocks() as demo:
             overlap_portion = gr.Slider(minimum=0.0, maximum=0.9, value=0.5, step=0.1, label="Overlap portion", interactive=True)
             window_type = gr.Dropdown(choices=["Hann", "Hamming"], value="Hann", label="Window type", interactive=True)
             normalization = gr.Slider(minimum=0.0, maximum=1.0, value=1.0, step=0.1, label="Normalization", interactive=True)
+            exit_layer_slider = gr.Slider(
+                minimum=3, maximum=12, value=8, step=1,
+                label="Exit layer (RealTime only)", interactive=False
+            )
+            look_ahead_frames_slider = gr.Slider(
+                minimum=0, maximum=2, value=0, step=1,
+                label="Look ahead frames (RealTime only)", interactive=False
+            )
+
+    # Variant-dependent enable/disable for RealTime-only sliders.
+    variant_dropdown.change(
+        fn=lambda variant: (
+            gr.update(interactive=(variant == "RealTime")),
+            gr.update(interactive=(variant == "RealTime")),
+        ),
+        inputs=[variant_dropdown],
+        outputs=[exit_layer_slider, look_ahead_frames_slider],
+    )
 
     enhance_btn = gr.Button("Enhance")
     with gr.Row():
@@ -297,12 +312,12 @@ with gr.Blocks() as demo:
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     plot_output = gr.Plot(label="Spectrograms")
 
-    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0):
-        return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization)
+    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
+        return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
 
     enhance_btn.click(
         fn=unified_enhance,
-        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization],
+        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
         outputs=[input_audio_player, output_audio, plot_output]
     )
 
