@@ -111,7 +111,7 @@ VARIANT_REGISTRY = {
         "family": "realtime",
     },
     "whisper": {
-        "label": "Whisper · susurro (12 bloques)",
+        "label": "Whisper · diálogos bajos (12 bloques)",
         "recipe": "recipes/USEMamba_12x1_whisper_lr_00002_norm_05_vq_067_nfft_320_hop_160_NRIR_012_pha_0005_com_04_early_005_release_random_layer_GAN_longer_1k.yaml",
         "model_class": "SEMamba_decoder_list",
         "model_module": "models.streaming_generator_SEMamba_time_d1_random_layer_ahead_sep_conv",
@@ -343,7 +343,7 @@ with gr.Blocks() as demo:
                     "Laughter · preserva risa (30 bloques)",
                     "BF16 · menor tamaño (30 bloques)",
                     "RealTime · baja latencia (12 bloques)",
-                    "Whisper · susurro (12 bloques)",
+                    "Whisper · diálogos bajos (12 bloques)",
                 ],
                 value="Standard (30 bloques)",
             )
