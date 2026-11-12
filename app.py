@@ -347,19 +347,45 @@ with gr.Blocks() as demo:
                 ],
                 value="Standard (30 bloques)",
             )
-            target_sampling_rate = gr.Slider(minimum=0, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for bandwidth extension (0 = off):", interactive=True)
-            low_pass_sampling_rate = gr.Slider(minimum=0, maximum=48000, value=0, step=1000, label="(Optional) Enter target sampling rate for pre-low-pass filtering before bandwidth extension (0 = off):", interactive=True)
-            chunk_size_s = gr.Slider(minimum=1, maximum=10, value=3, step=1, label="Chunk size (seconds)", interactive=True)
-            overlap_portion = gr.Slider(minimum=0.0, maximum=0.9, value=0.5, step=0.1, label="Overlap portion", interactive=True)
-            window_type = gr.Dropdown(choices=["Hann", "Hamming"], value="Hann", label="Window type", interactive=True)
-            normalization = gr.Slider(minimum=0.0, maximum=1.0, value=1.0, step=0.1, label="Normalization", interactive=True)
+            target_sampling_rate = gr.Slider(
+                minimum=0, maximum=48000, value=0, step=1000,
+                label="(Optional) Target sampling rate (0 = off). Lower = faster processing but loses high-frequency detail.",
+                interactive=True,
+            )
+            low_pass_sampling_rate = gr.Slider(
+                minimum=0, maximum=48000, value=0, step=1000,
+                label="(Optional) Pre low-pass filter rate (0 = off). Lower = faster but removes more high frequencies.",
+                interactive=True,
+            )
+            chunk_size_s = gr.Slider(
+                minimum=1, maximum=10, value=3, step=1,
+                label="Chunk size (seconds). Smaller = lower memory but more overhead per chunk.",
+                interactive=True,
+            )
+            overlap_portion = gr.Slider(
+                minimum=0.0, maximum=0.9, value=0.5, step=0.1,
+                label="Overlap portion. Lower = faster but may cause join artifacts between chunks.",
+                interactive=True,
+            )
+            window_type = gr.Dropdown(
+                choices=["Hann", "Hamming"], value="Hann",
+                label="Window type. Hann = smoother; Hamming = sharper edges.",
+                interactive=True,
+            )
+            normalization = gr.Slider(
+                minimum=0.0, maximum=1.0, value=1.0, step=0.1,
+                label="Normalization. Lower = quieter output. No speed impact.",
+                interactive=True,
+            )
             exit_layer_slider = gr.Slider(
                 minimum=3, maximum=12, value=8, step=1,
-                label="Exit layer (RealTime/Whisper only)", interactive=False
+                label="Exit layer (RealTime/Whisper only). Lower = faster but worse quality.",
+                interactive=False,
             )
             look_ahead_frames_slider = gr.Slider(
                 minimum=0, maximum=2, value=0, step=1,
-                label="Look ahead frames (RealTime/Whisper only)", interactive=False
+                label="Look ahead frames (RealTime/Whisper only). Lower = faster but less future context.",
+                interactive=False,
             )
 
     # Variant-dependent enable/disable for RealTime/Whisper sliders.
