@@ -336,6 +336,11 @@ with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
             input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
+            batch_input_files = gr.File(
+                file_count="multiple",
+                label="Batch Input Files (WAV, FLAC, OGG, MP3) - optional batch processing",
+                interactive=True,
+            )
             variant_dropdown = gr.Dropdown(
                 label="Model Variant",
                 choices=[
@@ -401,18 +406,57 @@ with gr.Blocks() as demo:
     )
 
     enhance_btn = gr.Button("Enhance")
+    batch_enhance_btn = gr.Button("Batch Enhance All Files")
+    open_output_folder_btn = gr.Button("Open Output Folder")
     with gr.Row():
         input_audio_player = gr.Audio(label="Original Input Audio", type="filepath")
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
+    batch_log = gr.Textbox(label="Batch Processing Log", lines=5, interactive=False)
     plot_output = gr.Plot(label="Spectrograms")
 
     def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
         return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
 
+    def batch_enhance_files(batch_files, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
+        if batch_files is None:
+            return None, None, None, "No batch files selected."
+        results = []
+        messages = []
+        for f in batch_files:
+            try:
+                original, enhanced_path, fig = enhance(f.name, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
+                results.append(enhanced_path)
+                messages.append(f"✓ {os.path.basename(f.name)} -> {os.path.basename(enhanced_path)}")
+            except Exception as e:
+                messages.append(f"✗ {os.path.basename(f.name)}: {str(e)}")
+        log_text = "\n".join(messages)
+        return results[0] if results else None, results[-1] if results else None, fig if results else None, log_text
+
+    def open_output_folder():
+        if sys.platform == "win32":
+            os.startfile("output")
+        elif sys.platform.startswith("linux"):
+            subprocess.Popen(["xdg-open", "output"])
+        else:  # macOS
+            subprocess.Popen(["open", "output"])
+        return "Output folder opened."
+
     enhance_btn.click(
         fn=unified_enhance,
         inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
         outputs=[input_audio_player, output_audio, plot_output]
+    )
+
+    batch_enhance_btn.click(
+        fn=batch_enhance_files,
+        inputs=[batch_input_files, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
+        outputs=[input_audio_player, output_audio, plot_output, batch_log]
+    )
+
+    open_output_folder_btn.click(
+        fn=open_output_folder,
+        inputs=None,
+        outputs=None,
     )
 
 if __name__ == "__main__":
