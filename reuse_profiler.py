@@ -120,13 +120,40 @@ def _make_even(value):
     return value if value % 2 == 0 else value + 1
 
 
-def stft_geometry(cfg, sample_rate, num_samples=None):
+def scan_time_frames(t_frames, time_stride=1, time_kernel=1, time_pad=0):
+    """Time frames the encoder hands to the Mamba stack.
+
+    The scan workspace depends on the *coded* time grid, not on the STFT frame
+    count. The generator (Standard) or the encoder (RealTime) adds
+    ``time_pad`` frames of zero padding on the time axis, then a conv with
+    ``time_kernel`` taps and ``time_stride`` downsamples it:
+
+        t_scan = floor((t_frames + time_pad - time_kernel) / time_stride) + 1
+
+    * Standard: +2 frames, (1, 3) conv with stride (4, 2) -> t_scan ~= T / 4.
+    * RealTime: +2 frames, (3, 3) conv with stride (1, 2) -> t_scan == T.
+
+    So both families reach the Mamba stack at 50 coded frames/s, and the scan
+    cost per second of audio is the same. The RealTime OOM comes from feeding
+    the whole file, not from a wider coded grid.
+    """
+    if t_frames is None:
+        return None
+    stride = max(1, int(time_stride or 1))
+    kernel = max(1, int(time_kernel or 1))
+    pad = max(0, int(time_pad or 0))
+    return (int(t_frames) + pad - kernel) // stride + 1
+
+
+def stft_geometry(cfg, sample_rate, num_samples=None, time_stride=1,
+                  time_kernel=1, time_pad=0):
     """Resolve the STFT sizes and encoder grid for a given input sample rate.
 
     ``app.py`` scales ``n_fft``/``hop``/``win`` so the model keeps seeing the
     same time resolution it was trained on. The frequency axis, however, grows
     with the input sample rate, and that is the axis that drives the scan
-    workspace.
+    workspace. ``t_scan`` is the coded time grid the Mamba stack actually sees
+    (see ``scan_time_frames``); ``t_frames`` is the raw STFT frame count.
     """
     stft = cfg["stft_cfg"]
     model_sr = stft["sampling_rate"]
@@ -134,8 +161,8 @@ def stft_geometry(cfg, sample_rate, num_samples=None):
     hop = _make_even(stft["hop_size"] * sample_rate // model_sr)
     win = _make_even(stft["win_size"] * sample_rate // model_sr)
     freq_bins = n_fft // 2 + 1
-    # DenseEncoder: +2 freq bins of zero padding, then a (1, 3) conv with
-    # stride (1, 2) -> floor((freq_bins - 1) / 2) + 1.
+    # Both generators append 2 zero frequency bins, then DenseEncoder applies a
+    # (1, 3) conv with stride (1, 2) -> floor((freq_bins - 1) / 2) + 1.
     f_enc = (freq_bins - 1) // 2 + 1
     geom = {
         "sample_rate": sample_rate,
@@ -145,35 +172,40 @@ def stft_geometry(cfg, sample_rate, num_samples=None):
         "freq_bins": freq_bins,
         "f_enc": f_enc,
         "fps": sample_rate / hop if hop else 0.0,
+        "time_stride": max(1, int(time_stride or 1)),
     }
     if num_samples is not None:
         # center=True adds n_fft // 2 of padding on both sides.
         geom["t_frames"] = int(num_samples) // hop + 1
+        geom["t_scan"] = scan_time_frames(
+            geom["t_frames"], time_stride, time_kernel, time_pad
+        )
         geom["duration_s"] = float(num_samples) / float(sample_rate) if sample_rate else 0.0
     return geom
 
 
-def estimate_scan_workspace_mb(t_frames, f_enc, d_inner, d_state, dtype_bytes=4, batch=1):
+def estimate_scan_workspace_mb(t_scan, f_enc, d_inner, d_state, dtype_bytes=4, batch=1):
     """Peak transient allocation of one ``selective_scan_ref`` block pass.
 
     mamba's pure-Python reference kernel materialises two float32 tensors of
     shape ``[batch, d_inner, seq, d_state]`` (``deltaA`` and ``deltaB_u``).
-    For the RealTime family:
+    ``t_scan`` must be the coded time grid (see ``scan_time_frames``), not the
+    raw STFT frame count. For both families:
 
-      * temporal Mamba: batch = f_enc, seq = t_frames
-      * frequency Mamba: batch = t_frames, seq = f_enc, called twice
+      * temporal Mamba: batch = f_enc, seq = t_scan
+      * frequency Mamba: batch = t_scan, seq = f_enc, called twice
         (forward + backward), but the calls do not overlap in time
 
-    All three calls share the same ``batch * seq = t_frames * f_enc`` product,
+    All three calls share the same ``batch * seq = t_scan * f_enc`` product,
     so the peak of a single block pass is ``2 tensors * 4 bytes * product *
     d_inner * d_state``, times the number of audio channels (the encoder keeps
     channels in the batch dimension). Blocks run sequentially, so that is also
     the run peak.
     """
-    if not t_frames or not f_enc:
+    if not t_scan or not f_enc:
         return 0.0
     per_call_bytes = (
-        2.0 * max(1, int(batch)) * t_frames * f_enc * d_inner * d_state * dtype_bytes
+        2.0 * max(1, int(batch)) * t_scan * f_enc * d_inner * d_state * dtype_bytes
     )
     return per_call_bytes / _MB
 
@@ -192,13 +224,15 @@ def model_scan_shape(cfg):
 #   48 kHz predicted 3.68 GB -> peak 6.31 GB (1.71x)
 # The extra 1.7-1.8x is the encoder/decoder activation stack plus allocator
 # granularity; it scales with f_enc, so it is stable across sample rates.
+# Cross-check on the chunked Standard family (3 s, 16 kHz stereo, 3 s chunks):
+#   t_scan 151, predicted 1.30 GB -> measured 1.32 GB (1.77x).
 MEMORY_OVERHEAD_FACTOR = 1.75
 
 
-def predict_peak_mb(t_frames, f_enc, d_inner, d_state, batch=1):
+def predict_peak_mb(t_scan, f_enc, d_inner, d_state, batch=1):
     """Calibrated peak estimate: scan workspace * measured overhead factor."""
     return estimate_scan_workspace_mb(
-        t_frames, f_enc, d_inner, d_state, batch=batch
+        t_scan, f_enc, d_inner, d_state, batch=batch
     ) * MEMORY_OVERHEAD_FACTOR
 
 

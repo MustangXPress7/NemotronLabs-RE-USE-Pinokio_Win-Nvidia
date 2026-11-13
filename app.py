@@ -32,6 +32,7 @@ from reuse_profiler import (
     gpu_memory,
     model_scan_shape,
     predict_peak_mb,
+    scan_time_frames,
     stft_geometry,
 )
 
@@ -86,6 +87,11 @@ VARIANT_REGISTRY = {
         "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE",
         "chunked": True,
         "family": "standard",
+        # The generator pads +2 time frames and DenseEncoder uses a (1, 3)
+        # conv with stride (4, 2): the Mamba stack sees T / 4 frames.
+        "encoder_time_stride": 4,
+        "encoder_time_kernel": 1,
+        "encoder_time_pad": 2,
     },
     "laughter": {
         "label": "Laughter · preserva risa (30 bloques)",
@@ -96,6 +102,9 @@ VARIANT_REGISTRY = {
         "weight_repo": "nvidia/NVIDIA-NemotronLabs-RE-USE-laughter",
         "chunked": True,
         "family": "standard",
+        "encoder_time_stride": 4,
+        "encoder_time_kernel": 1,
+        "encoder_time_pad": 2,
     },
     "bf16": {
         "label": "BF16 · menor tamaño (30 bloques)",
@@ -106,6 +115,9 @@ VARIANT_REGISTRY = {
         "weight_repo": "giangndm/NVIDIA-NemotronLabs-RE-USE-bf16",
         "chunked": True,
         "family": "standard",
+        "encoder_time_stride": 4,
+        "encoder_time_kernel": 1,
+        "encoder_time_pad": 2,
     },
     # --- Gama RealTime (12 bloques Mamba, inferencia single-pass) ---
     "realtime": {
@@ -120,6 +132,11 @@ VARIANT_REGISTRY = {
         "exit_layer_default": 8,
         "look_ahead_frames_default": 0,
         "family": "realtime",
+        # The encoder pads +2 time frames, then a (3, 3) conv with stride
+        # (1, 2) consumes that padding: the Mamba stack sees T frames.
+        "encoder_time_stride": 1,
+        "encoder_time_kernel": 3,
+        "encoder_time_pad": 2,
     },
     "whisper": {
         "label": "Whisper · diálogos bajos (12 bloques)",
@@ -133,6 +150,9 @@ VARIANT_REGISTRY = {
         "exit_layer_default": 8,
         "look_ahead_frames_default": 0,
         "family": "realtime",
+        "encoder_time_stride": 1,
+        "encoder_time_kernel": 3,
+        "encoder_time_pad": 2,
     },
 }
 
@@ -163,8 +183,10 @@ _USE_MODELS = {}
 OOM_HINTS = [
     "The RealTime variants run a single forward pass over the whole file, so the",
     "selective-scan workspace grows linearly with duration and frequency width:",
-    "  workspace ~= 2 tensors * 4 B * t_frames * f_enc * d_inner * d_state",
-    "It is not a model-size problem (3.7M params); it is the pure-Python scan",
+    "  workspace ~= 2 tensors * 4 B * t_scan * f_enc * d_inner * d_state",
+    "  (t_scan is the coded time grid the Mamba stack sees: T for RealTime, T/4",
+    "   for Standard, so both run at 50 frames per second of audio.)",
+    "It is not a model-size problem (13.5M params); it is the pure-Python scan",
     "kernel materialising deltaA / deltaB_u for the full utterance.",
     "Mitigations:",
     "  1. Split the input into clips of a few seconds, or use the Standard",
@@ -286,7 +308,14 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
 
             n_channels, n_samples = Noisy_wav.shape
             audio_seconds = n_samples / noisy_sr
-            geom = stft_geometry(cfg, noisy_sr, n_samples)
+            geom = stft_geometry(
+                cfg,
+                noisy_sr,
+                n_samples,
+                time_stride=entry.get("encoder_time_stride", 1),
+                time_kernel=entry.get("encoder_time_kernel", 1),
+                time_pad=entry.get("encoder_time_pad", 0),
+            )
             d_inner, d_state = model_scan_shape(cfg)
 
             logger.info(
@@ -298,8 +327,8 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 f"win={win_size_scaled} -> {geom['freq_bins']} bins, {geom['fps']:.1f} frames/s"
             )
             logger.info(
-                f"encoder grid: T={geom['t_frames']} frames x F={geom['f_enc']} bins "
-                f"(hid_feature*d_inner={d_inner}, d_state={d_state})"
+                f"encoder grid: STFT T={geom['t_frames']} -> scan T={geom['t_scan']} x F={geom['f_enc']} "
+                f"(time stride {geom['time_stride']}; d_inner={d_inner}, d_state={d_state})"
             )
 
             # -- preflight warnings ------------------------------------------------
@@ -352,17 +381,23 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 )
                 # The chunk size, not the file length, sets the memory peak here.
                 chunk_t_frames = chunk_size // hop_size_scaled + 1
+                chunk_t_scan = scan_time_frames(
+                    chunk_t_frames,
+                    geom["time_stride"],
+                    entry.get("encoder_time_kernel", 1),
+                    entry.get("encoder_time_pad", 0),
+                )
                 chunk_workspace_mb = estimate_scan_workspace_mb(
-                    chunk_t_frames, geom["f_enc"], d_inner, d_state
+                    chunk_t_scan, geom["f_enc"], d_inner, d_state
                 )
                 chunk_peak_mb = predict_peak_mb(
-                    chunk_t_frames, geom["f_enc"], d_inner, d_state
+                    chunk_t_scan, geom["f_enc"], d_inner, d_state
                 )
                 logger.info(
                     f"per-chunk scan workspace: {chunk_workspace_mb / 1024:.2f} GB "
-                    f"(estimated peak {chunk_peak_mb / 1024:.2f} GB) for "
-                    f"T={chunk_t_frames} x F={geom['f_enc']}; chunk size is the "
-                    "memory knob in this mode"
+                    f"(estimated peak {chunk_peak_mb / 1024:.2f} GB) for scan "
+                    f"T={chunk_t_scan} x F={geom['f_enc']} (STFT T={chunk_t_frames}); "
+                    "chunk size is the memory knob in this mode"
                 )
                 mem = gpu_memory()
                 if mem and chunk_peak_mb > mem["free_mb"]:
@@ -451,10 +486,10 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             else:
                 # Single-pass RealTime inference (no chunking)
                 predicted_mb = estimate_scan_workspace_mb(
-                    geom["t_frames"], geom["f_enc"], d_inner, d_state, batch=n_channels
+                    geom["t_scan"], geom["f_enc"], d_inner, d_state, batch=n_channels
                 )
                 predicted_peak_mb = predict_peak_mb(
-                    geom["t_frames"], geom["f_enc"], d_inner, d_state, batch=n_channels
+                    geom["t_scan"], geom["f_enc"], d_inner, d_state, batch=n_channels
                 )
                 mem = gpu_memory()
                 logger.info(
@@ -502,7 +537,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
 
                 with logger.stage(
                     "model_forward",
-                    note=f"single pass over {audio_seconds:.2f} s, {geom['t_frames']} frames",
+                    note=f"single pass over {audio_seconds:.2f} s, {geom['t_scan']} scan frames",
                 ) as rec:
                     amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
                     torch.cuda.synchronize()

@@ -142,14 +142,22 @@ text plus a JSON sidecar to `logs/inference/`. The **Open Logs Folder** button
 opens that directory. One run looks like this:
 
 ```
+[   0.095s] info   stft (scaled to input rate): n_fft=640 hop=320 win=640 -> 321 bins, 50.0 frames/s
+[   0.095s] info   encoder grid: STFT T=251 -> scan T=251 x F=161 (time stride 1; d_inner=256, d_state=16)
 [   0.653s] info   predicted selective-scan workspace: 1.23 GB (peak of a single Mamba block pass, 256 x 16 state)
 [   0.653s] info   predicted total peak: 2.16 GB (scan workspace x 1.75 measured activation overhead)
 [   0.868s] +  213.3 ms | stft             | alloc 53 MB (+1 MB) peak 54 MB   321 bins x 251 frames
-[   2.411s] +    1.54 s | model_forward    | alloc 63 MB (+10 MB) peak 2.16 GB  single pass over 5.00 s, 251 frames
+[   2.411s] +    1.54 s | model_forward    | alloc 63 MB (+10 MB) peak 2.16 GB  single pass over 5.00 s, 251 scan frames
 [   2.498s] info   scan throughput: 969,864 scan iterations (15,517,824 state updates) in 24 kernel calls
                    over 1.54 s of model time -> 628,903 scan_iter/s
 [   2.498s] info   speed: 1.54 s of model time for 5.00 s of audio -> RTF 0.308 (3.24x realtime)
 ```
+
+`scan T` is the **coded** time grid the Mamba stack sees. The RealTime encoder
+keeps it equal to the STFT frame count (`T`), the Standard encoder divides it
+by 4, so both families run the scan at 50 frames per second. The memory
+prediction uses `scan T`, not the raw STFT frame count; see
+[OOM_ANALYSIS.md](OOM_ANALYSIS.md#3-f_enc-and-t_scan-from-the-scaled-stft).
 
 Followed by a per-block table with the temporal/frequency Mamba time of every
 block and its scan iteration count. Blocks above the selected `exit_layer` show
@@ -161,6 +169,7 @@ What the numbers mean:
 |-------|---------|
 | stage time | wall time of that step, measured after `torch.cuda.synchronize()` |
 | `alloc` / `peak` | torch allocator usage before/after and the run peak |
+| `scan T` | coded time frames the Mamba stack processes (RealTime: `T`, Standard: `T/4`) |
 | `scan_iter/s` | selective-scan state iterations per second (the kernel's throughput) |
 | `RTF` | model seconds per audio second; `< 1` is faster than real time |
 
