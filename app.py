@@ -828,25 +828,36 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
             "en `logs/inference/`."
         )
 
+    active_tab = gr.State("single")
+
     with gr.Row():
-        with gr.Column(scale=3):
+        variant_dropdown = gr.Dropdown(
+            label="Model variant",
+            choices=[
+                "Standard (30 bloques)",
+                "Laughter · preserva risa (30 bloques)",
+                "BF16 · menor tamaño (30 bloques)",
+                "RealTime · baja latencia (12 bloques)",
+                "Whisper · diálogos bajos (12 bloques)",
+            ],
+            value="Standard (30 bloques)",
+            scale=3,
+        )
+        enhance_btn = gr.Button("Enhance", variant="primary", scale=1)
+
+    with gr.Tabs() as input_tabs:
+        with gr.Tab("Audio", id="single") as tab_single:
             input_audio = gr.Audio(label="Input audio (WAV, FLAC, OGG, MP3)", type="filepath")
-        with gr.Column(scale=2):
-            variant_dropdown = gr.Dropdown(
-                label="Model variant",
-                choices=[
-                    "Standard (30 bloques)",
-                    "Laughter · preserva risa (30 bloques)",
-                    "BF16 · menor tamaño (30 bloques)",
-                    "RealTime · baja latencia (12 bloques)",
-                    "Whisper · diálogos bajos (12 bloques)",
-                ],
-                value="Standard (30 bloques)",
+        with gr.Tab("Lote (batch)", id="batch") as tab_batch:
+            batch_input_files = gr.File(
+                file_count="multiple",
+                label="Archivos (WAV, FLAC, OGG, MP3)",
+                interactive=True,
             )
-            with gr.Row():
-                enhance_btn = gr.Button("Enhance", variant="primary")
-                open_output_folder_btn = gr.Button("Output folder")
-                open_logs_folder_btn = gr.Button("Logs folder")
+            batch_log = gr.Textbox(label="Batch log", lines=4, max_lines=12, interactive=False)
+
+    tab_single.select(lambda: "single", None, active_tab)
+    tab_batch.select(lambda: "batch", None, active_tab)
 
     with gr.Accordion("Ajustes avanzados", open=False):
         with gr.Row():
@@ -921,15 +932,6 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
         outputs=[exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
     )
 
-    with gr.Accordion("Procesado por lotes", open=False):
-        batch_input_files = gr.File(
-            file_count="multiple",
-            label="Archivos (WAV, FLAC, OGG, MP3)",
-            interactive=True,
-        )
-        batch_enhance_btn = gr.Button("Batch Enhance All Files")
-        batch_log = gr.Textbox(label="Batch log", lines=4, max_lines=12, interactive=False)
-
     with gr.Row():
         input_audio_player = gr.Audio(label="Original", type="filepath")
         output_audio = gr.Audio(label="Enhanced", type="filepath")
@@ -944,6 +946,12 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
             )
         with gr.Tab("Espectrogramas"):
             plot_output = gr.Plot(label="Spectrograms")
+
+    with gr.Row():
+        with gr.Column():
+            open_output_folder_btn = gr.Button("Open Output Folder")
+        with gr.Column():
+            open_logs_folder_btn = gr.Button("Open Logs Folder")
 
     def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
         return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
@@ -971,6 +979,14 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
         detail_text = "\n\n".join(details)
         return results[0] if results else None, results[-1] if results else None, fig if results else None, log_text, detail_text
 
+    def process_active(active, audio_path, batch_files, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
+        if active == "batch":
+            return batch_enhance_files(batch_files, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
+        if not audio_path:
+            return None, None, None, "", "No input audio selected."
+        original, enhanced_path, fig, detail = unified_enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
+        return original, enhanced_path, fig, "", detail
+
     def open_output_folder():
         if sys.platform == "win32":
             os.startfile("output")
@@ -992,15 +1008,14 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
         return f"Logs folder opened: {log_dir}"
 
     enhance_btn.click(
-        fn=unified_enhance,
-        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
-        outputs=[input_audio_player, output_audio, plot_output, detail_log]
-    )
-
-    batch_enhance_btn.click(
-        fn=batch_enhance_files,
-        inputs=[batch_input_files, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
-        outputs=[input_audio_player, output_audio, plot_output, batch_log, detail_log]
+        fn=process_active,
+        inputs=[
+            active_tab, input_audio, batch_input_files,
+            low_pass_sampling_rate, target_sampling_rate, variant_dropdown,
+            chunk_size_s, overlap_portion, window_type, normalization,
+            exit_layer_slider, look_ahead_frames_slider, streaming_checkbox,
+        ],
+        outputs=[input_audio_player, output_audio, plot_output, batch_log, detail_log],
     )
 
     open_output_folder_btn.click(
