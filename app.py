@@ -17,6 +17,7 @@ import soundfile as sf
 import time
 import math
 import contextlib
+import threading
 
 CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
 
@@ -187,6 +188,24 @@ sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
 _USE_MODELS = {}
 
+# Cooperative cancellation for long-running enhance jobs.
+CANCEL_EVENT = threading.Event()
+
+
+class EnhancementCancelled(Exception):
+    """Raised when the user requests cancellation of the current enhance run."""
+
+
+def _check_cancel():
+    if CANCEL_EVENT.is_set():
+        raise EnhancementCancelled("Cancelled by user")
+
+
+def request_cancel():
+    CANCEL_EVENT.set()
+    return "Cancel requested. The current run will stop at the next checkpoint."
+
+
 OOM_HINTS = [
     "The RealTime variants run a single forward pass over the whole file, so the",
     "selective-scan workspace grows linearly with duration and frequency width:",
@@ -282,6 +301,7 @@ def block_progress(model, total_blocks, label="model"):
                 f"~{remaining:7.2f}s remaining  {avg * 1000:7.1f} ms/block",
                 flush=True,
             )
+            _check_cancel()
         return hook
 
     try:
@@ -342,6 +362,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
         meta["exit_layer"] = exit_layer
         meta["look_ahead"] = look_ahead_frames
     logger.begin(**meta)
+    CANCEL_EVENT.clear()
 
     try:
         with torch.no_grad():
@@ -530,6 +551,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 for c in range(Noisy_wav.shape[0]):
                     noisy_wav = Noisy_wav[c:c+1, :]
                     for i in range(num_chunks):
+                        _check_cancel()
                         label = (
                             f"ch{c + 1} chunk {i + 1}/{num_chunks}"
                             if n_channels > 1
@@ -689,6 +711,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                             progress=True,
                             progress_every=max(1, geom["t_frames"] // 20),
                             progress_label="streaming",
+                            cancel_event=CANCEL_EVENT,
                         )
                         torch.cuda.synchronize()
                     model_seconds += rec["seconds"] if rec else 0.0
@@ -793,7 +816,19 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             return filepath, enh_path, fig, log_text
 
     except Exception as exc:
-        message = str(exc)
+        cancelled = isinstance(exc, EnhancementCancelled) or (
+            isinstance(exc, RuntimeError) and "Cancelled" in str(exc)
+        )
+        message = "Cancelled by user" if cancelled else str(exc)
+        if cancelled:
+            logger.set("status", "cancelled")
+            logger.warn(message)
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+            log_text = logger.finish(summary=f"CANCELLED: {message}")
+            print(f"[reuse] {message}", flush=True)
+            return filepath, None, None, log_text
+
         logger.set("status", "failed")
         logger.set("error", message)
         logger.warn(f"{type(exc).__name__}: {message}")
@@ -844,6 +879,7 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
             scale=3,
         )
         enhance_btn = gr.Button("Enhance", variant="primary", scale=1)
+        cancel_btn = gr.Button("Cancelar", variant="stop", scale=1)
 
     with gr.Tabs() as input_tabs:
         with gr.Tab("Audio", id="single") as tab_single:
@@ -854,7 +890,7 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
                 label="Archivos (WAV, FLAC, OGG, MP3)",
                 interactive=True,
             )
-            batch_log = gr.Textbox(label="Batch log", lines=4, max_lines=12, interactive=False)
+            batch_log = gr.Textbox(label="Batch log", lines=4, max_lines=12, interactive=False, autoscroll=True)
 
     tab_single.select(lambda: "single", None, active_tab)
     tab_batch.select(lambda: "batch", None, active_tab)
@@ -943,6 +979,7 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
                 lines=8,
                 max_lines=30,
                 interactive=False,
+                autoscroll=True,
             )
         with gr.Tab("Espectrogramas"):
             plot_output = gr.Plot(label="Spectrograms")
@@ -1007,7 +1044,7 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
             subprocess.Popen(["open", log_dir])
         return f"Logs folder opened: {log_dir}"
 
-    enhance_btn.click(
+    enhance_event = enhance_btn.click(
         fn=process_active,
         inputs=[
             active_tab, input_audio, batch_input_files,
@@ -1016,6 +1053,12 @@ with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
             exit_layer_slider, look_ahead_frames_slider, streaming_checkbox,
         ],
         outputs=[input_audio_player, output_audio, plot_output, batch_log, detail_log],
+    )
+    cancel_btn.click(
+        fn=request_cancel,
+        inputs=None,
+        outputs=detail_log,
+        cancels=[enhance_event],
     )
 
     open_output_folder_btn.click(

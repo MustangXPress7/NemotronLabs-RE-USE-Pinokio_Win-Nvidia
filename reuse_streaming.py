@@ -394,6 +394,7 @@ def run_streaming_frames(
     progress=False,
     progress_every=10,
     progress_label="streaming",
+    cancel_event=None,
 ):
     """Feed a full ``[B, F, T]`` spectrogram through ``stream_model`` one frame at a time.
 
@@ -449,6 +450,8 @@ def run_streaming_frames(
 
     def _step(start, end):
         nonlocal steps_done
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("Cancelled by user")
         if use_cuda:
             start_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
