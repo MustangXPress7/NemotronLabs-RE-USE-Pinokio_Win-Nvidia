@@ -16,12 +16,23 @@ import gradio as gr
 import soundfile as sf
 import time
 import math
+import contextlib
 
 CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
 
 from reuse_runtime import (
     bind_selective_scan_reference,
     patch_mamba_selective_scan,
+)
+from reuse_profiler import (
+    MEMORY_OVERHEAD_FACTOR,
+    InferenceLogger,
+    ModuleProfiler,
+    estimate_scan_workspace_mb,
+    gpu_memory,
+    model_scan_shape,
+    predict_peak_mb,
+    stft_geometry,
 )
 
 # The pinned mamba tag hard-imports the compiled selective_scan_cuda extension.
@@ -149,7 +160,26 @@ sampling_rate = cfg1['stft_cfg']['sampling_rate']
 
 _USE_MODELS = {}
 
-def _get_model(variant_id):
+OOM_HINTS = [
+    "The RealTime variants run a single forward pass over the whole file, so the",
+    "selective-scan workspace grows linearly with duration and frequency width:",
+    "  workspace ~= 2 tensors * 4 B * t_frames * f_enc * d_inner * d_state",
+    "It is not a model-size problem (3.7M params); it is the pure-Python scan",
+    "kernel materialising deltaA / deltaB_u for the full utterance.",
+    "Mitigations:",
+    "  1. Split the input into clips of a few seconds, or use the Standard",
+    "     variant, which already runs chunk-wise with overlap-add.",
+    "  2. Convert to mono: stereo is currently fed as a batch of 2, doubling",
+    "     every activation.",
+    "  3. Resample to 16 kHz or 8 kHz before uploading. f_enc scales with the",
+    "     sample rate (48 kHz -> 481 bins, 16 kHz -> 161, 8 kHz -> 81), so the",
+    "     scan workspace drops ~3x at 16 kHz and ~6x at 8 kHz.",
+    "  4. Lower 'Exit layer' to 3-4: fewer Mamba blocks, same peak per block but",
+    "     less fragmentation and a shorter run.",
+]
+
+
+def _get_model(variant_id, logger=None):
     """Load and cache a model per variant id.
 
     Looks up VARIANT_REGISTRY, loads the recipe YAML, dynamically imports the
@@ -160,37 +190,84 @@ def _get_model(variant_id):
     if variant_id not in _USE_MODELS:
         entry = VARIANT_REGISTRY[variant_id]
         cfg = _VARIANT_FULL_CFG[variant_id]
+        source = entry.get("weight_repo") or entry.get("weight_path", "local weights")
+        if logger:
+            logger.info(f"loading model '{variant_id}' from {source} (first use, downloads if missing)")
         print(f"Loading {variant_id} model (first time, may take a while)...", flush=True)
-        mod = importlib.import_module(entry["model_module"])
-        model_class = getattr(mod, entry["model_class"])
-        if entry["weight_source"] == "hf_hub":
-            model = model_class.from_pretrained(entry.get("weight_repo", "nvidia/NVIDIA-NemotronLabs-RE-USE"), cfg=cfg).to(device)
-        elif entry["weight_source"] == "local_pth":
-            model = model_class(cfg).to(device)
-            state = torch.load(entry["weight_path"], map_location=device)
-            model.load_state_dict(state)
-        else:
-            raise ValueError(f"Unknown weight_source: {entry['weight_source']}")
-        model.eval()
+        with (logger.stage("load_model", note=variant_id) if logger else contextlib.nullcontext()):
+            mod = importlib.import_module(entry["model_module"])
+            model_class = getattr(mod, entry["model_class"])
+            if entry["weight_source"] == "hf_hub":
+                model = model_class.from_pretrained(entry.get("weight_repo", "nvidia/NVIDIA-NemotronLabs-RE-USE"), cfg=cfg).to(device)
+            elif entry["weight_source"] == "local_pth":
+                model = model_class(cfg).to(device)
+                state = torch.load(entry["weight_path"], map_location=device)
+                model.load_state_dict(state)
+            else:
+                raise ValueError(f"Unknown weight_source: {entry['weight_source']}")
+            model.eval()
         _USE_MODELS[variant_id] = model
+        n_params = sum(p.numel() for p in model.parameters())
+        if logger:
+            logger.info(
+                f"model ready: {n_params / 1e6:.2f}M parameters, "
+                f"{n_params * 4 / (1024 * 1024):.0f} MB weights (fp32), "
+                f"{len(model.TSMamba)} Mamba blocks"
+            )
         print(f"{variant_id} model loaded.", flush=True)
+    elif logger:
+        logger.info(f"reusing cached model '{variant_id}'")
     return _USE_MODELS[variant_id]
 
 @spaces.GPU
 def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
-    try:
-        # Gradio pasa la etiqueta completa del dropdown; convertirla al ID interno del registro.
-        if variant_id in VARIANT_LABEL_TO_ID:
-            variant_id = VARIANT_LABEL_TO_ID[variant_id]
+    """Enhance one file.
 
+    Returns ``(input_path, output_path, spectrogram_figure, detailed_log)``.
+    The fourth value is the run log: pipeline stages with timings, GPU memory,
+    scan throughput (iterations/s) and a per-block profile. It is also written
+    to ``logs/inference/`` with a JSON sidecar. On failure the log is returned
+    instead of raising, so the reason (and the OOM mitigation hints) reaches
+    the UI.
+    """
+    # Gradio pasa la etiqueta completa del dropdown; convertirla al ID interno del registro.
+    if variant_id in VARIANT_LABEL_TO_ID:
+        variant_id = VARIANT_LABEL_TO_ID[variant_id]
+
+    entry = VARIANT_REGISTRY.get(variant_id)
+    is_realtime_family = bool(entry and entry.get("family") == "realtime")
+    mode = "single-pass (whole file)" if entry and not entry.get("chunked", True) else "chunked overlap-add"
+    logger = InferenceLogger(run_name=f"{variant_id}_enhance")
+    profiler = None
+
+    meta = {
+        "input": filepath,
+        "variant": variant_id,
+        "mode": mode,
+    }
+    try:
+        header = sf.info(filepath)
+        meta["sample_rate"] = f"{header.samplerate} Hz"
+        meta["channels"] = header.channels
+        meta["duration"] = f"{header.frames / header.samplerate:.2f} s"
+    except Exception as exc:
+        meta["input"] = f"{filepath} (header unreadable: {exc})"
+    if is_realtime_family:
+        meta["exit_layer"] = exit_layer
+        meta["look_ahead"] = look_ahead_frames
+    logger.begin(**meta)
+
+    try:
         with torch.no_grad():
             # 1. Lectura robusta con soundfile (evita totalmente el error de torchcodec.dll)
-            _data, noisy_sr = sf.read(filepath, dtype='float32', always_2d=True)
-            Noisy_wav = torch.from_numpy(_data.T.copy())
-            original_noisy_wav = Noisy_wav.clone()
-            original_sr = noisy_sr
+            with logger.stage("read_audio"):
+                _data, noisy_sr = sf.read(filepath, dtype='float32', always_2d=True)
+                Noisy_wav = torch.from_numpy(_data.T.copy())
+                original_noisy_wav = Noisy_wav.clone()
+                original_sr = noisy_sr
 
-            entry = VARIANT_REGISTRY[variant_id]
+            if entry is None:
+                raise ValueError(f"Unknown variant id '{variant_id}'.")
             if variant_id not in _VARIANT_FULL_CFG:
                 raise ValueError(
                     f"Variant '{variant_id}' is not available: recipe config '{entry['recipe']}' "
@@ -207,7 +284,56 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             hop_size_scaled = make_even(v_hop_size * noisy_sr // v_sampling_rate)
             win_size_scaled = make_even(v_win_size * noisy_sr // v_sampling_rate)
 
-            SE_model = _get_model(variant_id)
+            n_channels, n_samples = Noisy_wav.shape
+            audio_seconds = n_samples / noisy_sr
+            geom = stft_geometry(cfg, noisy_sr, n_samples)
+            d_inner, d_state = model_scan_shape(cfg)
+
+            logger.info(
+                f"audio: {n_samples} samples @ {noisy_sr} Hz, {n_channels} channel(s), "
+                f"{audio_seconds:.2f} s"
+            )
+            logger.info(
+                f"stft (scaled to input rate): n_fft={n_fft_scaled} hop={hop_size_scaled} "
+                f"win={win_size_scaled} -> {geom['freq_bins']} bins, {geom['fps']:.1f} frames/s"
+            )
+            logger.info(
+                f"encoder grid: T={geom['t_frames']} frames x F={geom['f_enc']} bins "
+                f"(hid_feature*d_inner={d_inner}, d_state={d_state})"
+            )
+
+            # -- preflight warnings ------------------------------------------------
+            if n_channels > 1:
+                if entry.get("chunked", True):
+                    detail = (
+                        f"they are processed one channel at a time, so the runtime is "
+                        f"multiplied by {n_channels}"
+                    )
+                else:
+                    detail = (
+                        f"they are processed as a batch of {n_channels} inside a single "
+                        f"forward pass, so every activation is multiplied by {n_channels}"
+                    )
+                logger.warn(
+                    f"input has {n_channels} channels; {detail}. The model expects mono audio."
+                )
+            if noisy_sr > 48000:
+                logger.warn(
+                    f"input is {noisy_sr} Hz (> 48 kHz): the frequency axis grows with the "
+                    "sample rate, so memory grows too. Resample to 16-48 kHz."
+                )
+            if lp_sr or target_sr:
+                logger.warn(
+                    f"the low-pass ({lp_sr} Hz) and target ({target_sr} Hz) sliders are not "
+                    f"applied by this pipeline; the model still sees {noisy_sr} Hz audio. "
+                    "Resample the file before uploading to get the memory/speed benefit."
+                )
+
+            SE_model = _get_model(variant_id, logger=logger)
+
+            profiler = ModuleProfiler(SE_model)
+            profiler.start()
+            model_seconds = 0.0
 
             # 2. Configuración de chunking: Standard usa overlap-add; RealTime pasa single-pass
             if entry.get("chunked", True):
@@ -218,11 +344,38 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 else:
                     window = torch.clamp(torch.hann_window(chunk_size).to(device), min=1e-7)
 
-                Noisy_wav = Noisy_wav.to(device)
-                audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
-                window_sum = torch.zeros_like(Noisy_wav).to(device)
-
                 num_chunks = max(1, math.ceil((Noisy_wav.shape[1] - chunk_size) / hop_length) + 1)
+                logger.info(
+                    f"chunking: {num_chunks} chunk(s) of {chunk_size} samples "
+                    f"({chunk_size / noisy_sr:.2f} s), hop {hop_length} samples "
+                    f"({overlap_portion:.0%} overlap), {window_type} window"
+                )
+                # The chunk size, not the file length, sets the memory peak here.
+                chunk_t_frames = chunk_size // hop_size_scaled + 1
+                chunk_workspace_mb = estimate_scan_workspace_mb(
+                    chunk_t_frames, geom["f_enc"], d_inner, d_state
+                )
+                chunk_peak_mb = predict_peak_mb(
+                    chunk_t_frames, geom["f_enc"], d_inner, d_state
+                )
+                logger.info(
+                    f"per-chunk scan workspace: {chunk_workspace_mb / 1024:.2f} GB "
+                    f"(estimated peak {chunk_peak_mb / 1024:.2f} GB) for "
+                    f"T={chunk_t_frames} x F={geom['f_enc']}; chunk size is the "
+                    "memory knob in this mode"
+                )
+                mem = gpu_memory()
+                if mem and chunk_peak_mb > mem["free_mb"]:
+                    logger.warn(
+                        f"predicted per-chunk peak ({chunk_peak_mb / 1024:.2f} GB) exceeds "
+                        f"free memory ({mem['free_mb'] / 1024:.2f} GB): lower 'Chunk size', "
+                        "use mono, or resample before uploading."
+                    )
+
+                with logger.stage("chunk_setup"):
+                    Noisy_wav = Noisy_wav.to(device)
+                    audio_enhanced = torch.zeros_like(Noisy_wav).to(device)
+                    window_sum = torch.zeros_like(Noisy_wav).to(device)
 
                 t_inf = time.time()
 
@@ -230,108 +383,222 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 for c in range(Noisy_wav.shape[0]):
                     noisy_wav = Noisy_wav[c:c+1, :]
                     for i in range(num_chunks):
-                        if i < num_chunks - 1:
-                            noisy_wav_chunk = noisy_wav[:, i * hop_length : i * hop_length + chunk_size]
-                        else:
-                            noisy_wav_chunk = noisy_wav[:, -chunk_size:]
-
-                        noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
-                            noisy_wav_chunk,
-                            n_fft=n_fft_scaled,
-                            hop_size=hop_size_scaled,
-                            win_size=win_size_scaled,
-                            compress_factor=v_compress_factor,
-                            center=True,
-                            addeps=False
+                        label = (
+                            f"ch{c + 1} chunk {i + 1}/{num_chunks}"
+                            if n_channels > 1
+                            else f"chunk {i + 1}/{num_chunks}"
                         )
+                        with logger.stage(label) as rec:
+                            if i < num_chunks - 1:
+                                noisy_wav_chunk = noisy_wav[:, i * hop_length : i * hop_length + chunk_size]
+                            else:
+                                noisy_wav_chunk = noisy_wav[:, -chunk_size:]
 
-                        if variant_id == "realtime":
-                            amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
-                        else:
-                            amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
+                            t_stft = time.perf_counter()
+                            noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
+                                noisy_wav_chunk,
+                                n_fft=n_fft_scaled,
+                                hop_size=hop_size_scaled,
+                                win_size=win_size_scaled,
+                                compress_factor=v_compress_factor,
+                                center=True,
+                                addeps=False
+                            )
+                            torch.cuda.synchronize()
+                            t_model = time.perf_counter()
 
-                        # Limpieza de artefactos
-                        mag = torch.expm1(RELU(amp_g))
-                        zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
-                        amp_g[:, :, (zero_portion > 0.5)[0]] = 0
+                            if is_realtime_family:
+                                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                            else:
+                                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
+                            torch.cuda.synchronize()
+                            t_istft = time.perf_counter()
+                            model_seconds += t_istft - t_model
 
-                        audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
-                        audio_g = pad_or_trim_to_match(noisy_wav_chunk.detach(), audio_g, pad_value=1e-8)
+                            # Limpieza de artefactos
+                            mag = torch.expm1(RELU(amp_g))
+                            zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
+                            amp_g[:, :, (zero_portion > 0.5)[0]] = 0
 
-                        # Acumulación Overlap-Add con ventana de Hann
-                        if i < num_chunks - 1:
-                            audio_enhanced[c:c+1, i * hop_length : i * hop_length + chunk_size] += audio_g * window[0:audio_g.shape[1]]
-                            window_sum[c:c+1, i * hop_length : i * hop_length + chunk_size] += window[0:audio_g.shape[1]]
-                        else:
-                            audio_enhanced[c:c+1, -chunk_size:] += audio_g * window[0:audio_g.shape[1]]
-                            window_sum[c:c+1, -chunk_size:] += window[0:audio_g.shape[1]]
+                            audio_g = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
+                            audio_g = pad_or_trim_to_match(noisy_wav_chunk.detach(), audio_g, pad_value=1e-8)
 
-                        torch.cuda.empty_cache()
+                            # Acumulación Overlap-Add con ventana de Hann
+                            if i < num_chunks - 1:
+                                audio_enhanced[c:c+1, i * hop_length : i * hop_length + chunk_size] += audio_g * window[0:audio_g.shape[1]]
+                                window_sum[c:c+1, i * hop_length : i * hop_length + chunk_size] += window[0:audio_g.shape[1]]
+                            else:
+                                audio_enhanced[c:c+1, -chunk_size:] += audio_g * window[0:audio_g.shape[1]]
+                                window_sum[c:c+1, -chunk_size:] += window[0:audio_g.shape[1]]
+
+                            torch.cuda.empty_cache()
+                            t_done = time.perf_counter()
+                            if rec is not None:
+                                rec["note"] = (
+                                    f"ch={c} at {(i * hop_length) / noisy_sr:.2f}s | "
+                                    f"stft {(t_model - t_stft) * 1000:.0f}ms "
+                                    f"model {(t_istft - t_model) * 1000:.0f}ms "
+                                    f"istft+ola {(t_done - t_istft) * 1000:.0f}ms"
+                                )
 
                 # Normalización final dividiendo por la suma de ventanas
-                audio_enhanced = audio_enhanced / torch.clamp(window_sum * normalization, min=1e-7)
+                with logger.stage("overlap_add_normalize"):
+                    audio_enhanced = audio_enhanced / torch.clamp(window_sum * normalization, min=1e-7)
 
                 torch.cuda.synchronize()
                 print(f"[Timer] Inferencia por chunks completada: {time.time() - t_inf:.4f}s", flush=True)
                 assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
             else:
                 # Single-pass RealTime inference (no chunking)
-                Noisy_wav = Noisy_wav.to(device)
-                noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
-                    Noisy_wav,
-                    n_fft=n_fft_scaled,
-                    hop_size=hop_size_scaled,
-                    win_size=win_size_scaled,
-                    compress_factor=v_compress_factor,
-                    center=True,
-                    addeps=False
+                predicted_mb = estimate_scan_workspace_mb(
+                    geom["t_frames"], geom["f_enc"], d_inner, d_state, batch=n_channels
                 )
-                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
-                mag = torch.expm1(RELU(amp_g))
-                zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
-                amp_g[:, :, (zero_portion > 0.5)[0]] = 0
-                audio_enhanced = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
-                audio_enhanced = pad_or_trim_to_match(Noisy_wav.detach(), audio_enhanced, pad_value=1e-8)
+                predicted_peak_mb = predict_peak_mb(
+                    geom["t_frames"], geom["f_enc"], d_inner, d_state, batch=n_channels
+                )
+                mem = gpu_memory()
+                logger.info(
+                    f"predicted selective-scan workspace: {predicted_mb / 1024:.2f} GB "
+                    f"(peak of a single Mamba block pass, {d_inner} x {d_state} state)"
+                )
+                logger.info(
+                    f"predicted total peak: {predicted_peak_mb / 1024:.2f} GB "
+                    f"(scan workspace x {MEMORY_OVERHEAD_FACTOR} measured activation overhead)"
+                )
+                if mem:
+                    logger.info(
+                        f"gpu memory before inference: {mem['free_mb'] / 1024:.2f} GB free "
+                        f"of {mem['total_mb'] / 1024:.2f} GB"
+                    )
+                    if predicted_peak_mb > mem["free_mb"]:
+                        logger.warn(
+                            f"predicted peak ({predicted_peak_mb / 1024:.2f} GB) exceeds free "
+                            f"memory ({mem['free_mb'] / 1024:.2f} GB). Expect an OOM on Linux or "
+                            "a silent spill into shared system memory on Windows (which can be "
+                            "10-20x slower). Split the file, use mono, or resample."
+                        )
+                        for line in OOM_HINTS:
+                            logger.info("  " + line)
+
+                with logger.stage("to_device"):
+                    Noisy_wav = Noisy_wav.to(device)
+                with logger.stage(
+                    "stft",
+                    note=f"{geom['freq_bins']} bins x {geom['t_frames']} frames",
+                ):
+                    noisy_mag, noisy_pha, noisy_com = mag_phase_stft(
+                        Noisy_wav,
+                        n_fft=n_fft_scaled,
+                        hop_size=hop_size_scaled,
+                        win_size=win_size_scaled,
+                        compress_factor=v_compress_factor,
+                        center=True,
+                        addeps=False
+                    )
+                # `com` is never consumed by the model; drop it before the forward
+                # pass, which is where the memory pressure is.
+                del noisy_com
+                torch.cuda.empty_cache()
+
+                with logger.stage(
+                    "model_forward",
+                    note=f"single pass over {audio_seconds:.2f} s, {geom['t_frames']} frames",
+                ) as rec:
+                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                    torch.cuda.synchronize()
+                model_seconds += rec["seconds"] if rec else 0.0
+
+                with logger.stage("mask_postprocess"):
+                    mag = torch.expm1(RELU(amp_g))
+                    zero_portion = torch.sum(mag == 0, 1) / mag.shape[1]
+                    amp_g[:, :, (zero_portion > 0.5)[0]] = 0
+                with logger.stage("istft"):
+                    audio_enhanced = mag_phase_istft(amp_g, pha_g, n_fft_scaled, hop_size_scaled, win_size_scaled, v_compress_factor)
+                with logger.stage("pad_trim"):
+                    audio_enhanced = pad_or_trim_to_match(Noisy_wav.detach(), audio_enhanced, pad_value=1e-8)
                 torch.cuda.synchronize()
                 print(f"[Timer] Inferencia single-pass completada", flush=True)
                 assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
 
-            # 4. Guardar únicamente el archivo mejorado en la carpeta output con sufijo único
-            output_dir = "output"
-            os.makedirs(output_dir, exist_ok=True)
+            profiler.stop()
 
-            # Extraemos el nombre del archivo original sin la extensión
-            base_name = os.path.splitext(os.path.basename(filepath))[0]
-            enh_filename = f"{base_name}_enhanced.wav"
-            enh_path = os.path.join(output_dir, enh_filename)
+            # 4. Estadísticas del modelo (iteraciones del scan y velocidad)
+            stats = profiler.stats()
+            if model_seconds > 0:
+                iter_per_s = stats["scan_iterations"] / model_seconds
+                state_per_s = stats["state_updates"] / model_seconds
+                logger.info(
+                    f"scan throughput: {stats['scan_iterations']:,} scan iterations "
+                    f"({stats['state_updates']:,} state updates) in {stats['scan_calls']} "
+                    f"kernel calls over {model_seconds:.2f} s of model time "
+                    f"-> {iter_per_s:,.0f} scan_iter/s, {state_per_s:,.0f} state_updates/s"
+                )
+                logger.info(
+                    f"speed: {model_seconds:.2f} s of model time for {audio_seconds:.2f} s of audio "
+                    f"-> RTF {model_seconds / audio_seconds:.3f} "
+                    f"({audio_seconds / model_seconds:.2f}x realtime)"
+                )
+                logger.set("scan_iterations", stats["scan_iterations"])
+                logger.set("scan_iter_per_s", iter_per_s)
+                logger.set("rtf", model_seconds / audio_seconds if audio_seconds else None)
+            profiler.log_to(logger, forward_seconds=model_seconds)
 
-            # Guardamos solo el resultado procesado
-            sf.write(enh_path, audio_enhanced.cpu().numpy().T, noisy_sr)
+            # 5. Guardar únicamente el archivo mejorado en la carpeta output con sufijo único
+            with logger.stage("save_wav"):
+                output_dir = "output"
+                os.makedirs(output_dir, exist_ok=True)
+
+                # Extraemos el nombre del archivo original sin la extensión
+                base_name = os.path.splitext(os.path.basename(filepath))[0]
+                enh_filename = f"{base_name}_enhanced.wav"
+                enh_path = os.path.join(output_dir, enh_filename)
+
+                # Guardamos solo el resultado procesado
+                sf.write(enh_path, audio_enhanced.cpu().numpy().T, noisy_sr)
 
             # Generación de espectrogramas
-            fig, axs = plt.subplots(1, 2, figsize=(16, 4))
-            D_noisy = librosa.stft(original_noisy_wav[0].cpu().numpy(), n_fft=512, hop_length=256)
-            S_noisy = librosa.amplitude_to_db(np.abs(D_noisy), ref=np.max)
-            librosa.display.specshow(S_noisy, sr=original_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[0], vmax=0)
-            axs[0].set_title("Noisy Spectrogram")
+            with logger.stage("spectrogram"):
+                fig, axs = plt.subplots(1, 2, figsize=(16, 4))
+                D_noisy = librosa.stft(original_noisy_wav[0].cpu().numpy(), n_fft=512, hop_length=256)
+                S_noisy = librosa.amplitude_to_db(np.abs(D_noisy), ref=np.max)
+                librosa.display.specshow(S_noisy, sr=original_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[0], vmax=0)
+                axs[0].set_title("Noisy Spectrogram")
 
-            D_clean = librosa.stft(audio_enhanced[0].cpu().numpy(), n_fft=512, hop_length=256)
-            S_clean = librosa.amplitude_to_db(np.abs(D_clean), ref=np.max)
-            librosa.display.specshow(S_clean, sr=noisy_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[1], vmax=0)
-            axs[1].set_title("Enhanced Spectrogram")
-            plt.tight_layout()
+                D_clean = librosa.stft(audio_enhanced[0].cpu().numpy(), n_fft=512, hop_length=256)
+                S_clean = librosa.amplitude_to_db(np.abs(D_clean), ref=np.max)
+                librosa.display.specshow(S_clean, sr=noisy_sr, hop_length=256, x_axis="time", y_axis="hz", ax=axs[1], vmax=0)
+                axs[1].set_title("Enhanced Spectrogram")
+                plt.tight_layout()
 
+            logger.set("status", "ok")
+            log_text = logger.finish(summary=f"OK -> {enh_path}")
             # Devolvemos la ruta original para el reproductor, la nueva ruta limpia y el gráfico
-            return filepath, enh_path, fig
+            return filepath, enh_path, fig, log_text
 
-    except Exception as e:
-        print(f"Error crítico en inferencia: {str(e)}", flush=True)
-        raise e
+    except Exception as exc:
+        message = str(exc)
+        logger.set("status", "failed")
+        logger.set("error", message)
+        logger.warn(f"{type(exc).__name__}: {message}")
+        oom = "out of memory" in message.lower() or "OutOfMemory" in type(exc).__name__
+        if oom:
+            logger.info("CUDA OOM while running this file. Diagnosis and mitigations:")
+            for line in OOM_HINTS:
+                logger.info("  " + line)
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+        log_text = logger.finish(summary=f"FAILED: {type(exc).__name__}: {message}")
+        print(f"Error crítico en inferencia: {message}", flush=True)
+        return filepath, None, None, log_text
+    finally:
+        if profiler is not None:
+            profiler.stop()
 
 with gr.Blocks() as demo:
     gr.Markdown(ABOUT)
     gr.Markdown("**Note 1**: For bandwidth extension, the performance may be affected by the characteristics of the input data, particularly the cutoff pattern. A simple solution is to apply low-pass filtering beforehand.")
-    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. To address this, use the chunk-wise inference implementation provided on the Hugging Face.")
+    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. The **RealTime** variants run a single forward pass over the whole file, so memory grows with duration and sample rate. Split long recordings, use mono, resample to 16-48 kHz, or pick the **Standard** variant, which processes in chunks. Every run now prints a **Detailed Processing Log** with per-stage timings, GPU memory and scan iterations/s, and saves it to `logs/inference/`.")
+    gr.Markdown("**Note 3**: The low-pass and target sample-rate sliders are currently not applied by the pipeline; resample the file before uploading if you need the memory/speed benefit (the log warns you when they are set).")
 
     with gr.Row():
         with gr.Column():
@@ -408,10 +675,17 @@ with gr.Blocks() as demo:
     enhance_btn = gr.Button("Enhance")
     batch_enhance_btn = gr.Button("Batch Enhance All Files")
     open_output_folder_btn = gr.Button("Open Output Folder")
+    open_logs_folder_btn = gr.Button("Open Logs Folder")
     with gr.Row():
         input_audio_player = gr.Audio(label="Original Input Audio", type="filepath")
         output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
     batch_log = gr.Textbox(label="Batch Processing Log", lines=5, interactive=False)
+    detail_log = gr.Textbox(
+        label="Detailed Processing Log (per-stage timings, GPU memory, scan iterations/s)",
+        lines=20,
+        max_lines=40,
+        interactive=False,
+    )
     plot_output = gr.Plot(label="Spectrograms")
 
     def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
@@ -419,18 +693,26 @@ with gr.Blocks() as demo:
 
     def batch_enhance_files(batch_files, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
         if batch_files is None:
-            return None, None, None, "No batch files selected."
+            return None, None, None, "No batch files selected.", ""
         results = []
         messages = []
+        details = []
+        fig = None
         for f in batch_files:
+            name = os.path.basename(f.name)
             try:
-                original, enhanced_path, fig = enhance(f.name, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
-                results.append(enhanced_path)
-                messages.append(f"✓ {os.path.basename(f.name)} -> {os.path.basename(enhanced_path)}")
+                original, enhanced_path, fig, detail = enhance(f.name, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
+                if enhanced_path:
+                    results.append(enhanced_path)
+                    messages.append(f"OK   {name} -> {os.path.basename(enhanced_path)}")
+                else:
+                    messages.append(f"FAIL {name} -> see the detailed log below")
+                details.append(f"===== {name} =====\n{detail}")
             except Exception as e:
-                messages.append(f"✗ {os.path.basename(f.name)}: {str(e)}")
+                messages.append(f"FAIL {name}: {str(e)}")
         log_text = "\n".join(messages)
-        return results[0] if results else None, results[-1] if results else None, fig if results else None, log_text
+        detail_text = "\n\n".join(details)
+        return results[0] if results else None, results[-1] if results else None, fig if results else None, log_text, detail_text
 
     def open_output_folder():
         if sys.platform == "win32":
@@ -441,20 +723,37 @@ with gr.Blocks() as demo:
             subprocess.Popen(["open", "output"])
         return "Output folder opened."
 
+    def open_logs_folder():
+        log_dir = os.path.abspath("logs/inference")
+        os.makedirs(log_dir, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(log_dir)
+        elif sys.platform.startswith("linux"):
+            subprocess.Popen(["xdg-open", log_dir])
+        else:  # macOS
+            subprocess.Popen(["open", log_dir])
+        return f"Logs folder opened: {log_dir}"
+
     enhance_btn.click(
         fn=unified_enhance,
         inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
-        outputs=[input_audio_player, output_audio, plot_output]
+        outputs=[input_audio_player, output_audio, plot_output, detail_log]
     )
 
     batch_enhance_btn.click(
         fn=batch_enhance_files,
         inputs=[batch_input_files, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
-        outputs=[input_audio_player, output_audio, plot_output, batch_log]
+        outputs=[input_audio_player, output_audio, plot_output, batch_log, detail_log]
     )
 
     open_output_folder_btn.click(
         fn=open_output_folder,
+        inputs=None,
+        outputs=None,
+    )
+
+    open_logs_folder_btn.click(
+        fn=open_logs_folder,
         inputs=None,
         outputs=None,
     )
