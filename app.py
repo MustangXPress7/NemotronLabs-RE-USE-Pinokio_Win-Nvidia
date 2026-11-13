@@ -811,22 +811,29 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
         if profiler is not None:
             profiler.stop()
 
-with gr.Blocks() as demo:
+with gr.Blocks(title="RE-USE Speech Enhancement") as demo:
     gr.Markdown(ABOUT)
-    gr.Markdown("**Note 1**: For bandwidth extension, the performance may be affected by the characteristics of the input data, particularly the cutoff pattern. A simple solution is to apply low-pass filtering beforehand.")
-    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. The **RealTime** variants run a single forward pass over the whole file, so memory grows with duration and sample rate. Tick **Streaming** to run them frame by frame with cached states (flat memory, slower pass); it also switches on by itself when the predicted peak does not fit in free VRAM. **Standard** already processes in chunks, where the chunk size is the memory knob. Every run prints a **Detailed Processing Log** with per-stage timings, GPU memory, scan iterations/s and a per-block profile, and saves it to `logs/inference/`.")
-    gr.Markdown("**Note 3**: The target sample-rate slider makes the model run (and the output play) at that rate; the low-pass slider resamples to that rate first, the same bandwidth-extension order as the original NVIDIA app. Both are off at 0, and the low-pass rate only applies when a target rate is set. Processing at a lower rate shrinks the frequency axis, so it is also the cheapest way to cut memory.")
+
+    with gr.Accordion("Notas y consejos", open=False):
+        gr.Markdown(
+            "- **Bandwidth extension:** el resultado puede depender del patrón de corte del audio; "
+            "un pre-filtrado paso-bajo puede ayudar.\n"
+            "- **Memoria (RealTime/Whisper):** el modo single-pass crece con duración y tasa de muestreo. "
+            "Activa **Streaming** para memoria plana (más lento) o se activará solo si el pico previsto "
+            "no cabe en VRAM. **Standard** ya procesa en chunks (el tamaño de chunk es la palanca de memoria).\n"
+            "- **Muestreo:** *Target sampling rate* hace que el modelo procese y escriba a esa tasa; "
+            "*Pre low-pass* se aplica antes y solo si hay target (0 = desactivado). Bajar la tasa reduce el eje "
+            "de frecuencia y la memoria.\n"
+            "- Cada ejecución escribe un **log detallado** (tiempos por etapa, memoria GPU, scan/RTF, perfil por bloque) "
+            "en `logs/inference/`."
+        )
 
     with gr.Row():
-        with gr.Column():
-            input_audio = gr.Audio(label="Input Audio (WAV, FLAC, OGG, MP3)", type="filepath")
-            batch_input_files = gr.File(
-                file_count="multiple",
-                label="Batch Input Files (WAV, FLAC, OGG, MP3) - optional batch processing",
-                interactive=True,
-            )
+        with gr.Column(scale=3):
+            input_audio = gr.Audio(label="Input audio (WAV, FLAC, OGG, MP3)", type="filepath")
+        with gr.Column(scale=2):
             variant_dropdown = gr.Dropdown(
-                label="Model Variant",
+                label="Model variant",
                 choices=[
                     "Standard (30 bloques)",
                     "Laughter · preserva risa (30 bloques)",
@@ -836,55 +843,70 @@ with gr.Blocks() as demo:
                 ],
                 value="Standard (30 bloques)",
             )
+            with gr.Row():
+                enhance_btn = gr.Button("Enhance", variant="primary")
+                open_output_folder_btn = gr.Button("Output folder")
+                open_logs_folder_btn = gr.Button("Logs folder")
+
+    with gr.Accordion("Ajustes avanzados", open=False):
+        with gr.Row():
             target_sampling_rate = gr.Slider(
                 minimum=0, maximum=48000, value=0, step=1000,
-                label="(Optional) Target sampling rate (0 = off). Lower = faster processing but loses high-frequency detail.",
+                label="Target sampling rate (Hz, 0 = off)",
+                info="Procesa y guarda a esta tasa (menos memoria si es menor). Activa el pre low-pass.",
                 interactive=True,
             )
             low_pass_sampling_rate = gr.Slider(
                 minimum=0, maximum=48000, value=0, step=1000,
-                label="(Optional) Pre low-pass filter rate (0 = off). Lower = faster but removes more high frequencies.",
+                label="Pre low-pass (Hz, 0 = off)",
+                info="Se aplica antes del target; solo tiene efecto si target > 0 (BWE).",
                 interactive=True,
             )
+        with gr.Row():
             chunk_size_s = gr.Slider(
                 minimum=1, maximum=10, value=3, step=1,
-                label="Chunk size (seconds). Smaller = lower memory but more overhead per chunk.",
+                label="Chunk size (s, Standard)",
+                info="Menor = menos memoria, más solapamiento por chunk.",
                 interactive=True,
             )
             overlap_portion = gr.Slider(
                 minimum=0.0, maximum=0.9, value=0.5, step=0.1,
-                label="Overlap portion. Lower = faster but may cause join artifacts between chunks.",
+                label="Overlap (Standard)",
+                info="Menor = más rápido, posibles artefactos en uniones.",
                 interactive=True,
             )
+        with gr.Row():
             window_type = gr.Dropdown(
                 choices=["Hann", "Hamming"], value="Hann",
-                label="Window type. Hann = smoother; Hamming = sharper edges.",
+                label="Window (Standard)",
+                info="Hann: más suave; Hamming: bordes más definidos.",
                 interactive=True,
             )
             normalization = gr.Slider(
                 minimum=0.1, maximum=1.0, value=1.0, step=0.1,
-                label="Normalization. Lower = louder output. No speed impact.",
+                label="Normalization",
+                info="Menor = salida más alta (más volumen).",
                 interactive=True,
             )
+        with gr.Row():
             exit_layer_slider = gr.Slider(
                 minimum=3, maximum=12, value=8, step=1,
-                label="Exit layer (RealTime/Whisper only). Lower = faster but worse quality.",
+                label="Exit layer (RealTime/Whisper)",
+                info="Menor = más rápido, menor calidad.",
                 interactive=False,
             )
             look_ahead_frames_slider = gr.Slider(
                 minimum=0, maximum=2, value=0, step=1,
-                label="Look ahead frames (RealTime/Whisper only). Lower = faster but less future context.",
+                label="Look-ahead frames (RealTime/Whisper)",
+                info="Menor = menos latencia, menos contexto futuro.",
                 interactive=False,
             )
-            streaming_checkbox = gr.Checkbox(
-                value=False,
-                label=(
-                    "Streaming (RealTime/Whisper only). Frame-by-frame with cached states: "
-                    "memory stays flat however long the file is, at a slower model pass. "
-                    "It also switches on by itself when the single pass would exceed free VRAM."
-                ),
-                interactive=False,
-            )
+        streaming_checkbox = gr.Checkbox(
+            value=False,
+            label="Streaming (RealTime/Whisper)",
+            info="Frame a frame con estados cacheados: memoria plana, pasada más lenta. Se activa solo si el single-pass no cabría en VRAM.",
+            interactive=False,
+        )
 
     # Variant-dependent enable/disable for RealTime/Whisper sliders.
     # Gradio passes the full dropdown label; resolve it to the internal variant ID
@@ -899,21 +921,29 @@ with gr.Blocks() as demo:
         outputs=[exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
     )
 
-    enhance_btn = gr.Button("Enhance")
-    batch_enhance_btn = gr.Button("Batch Enhance All Files")
-    open_output_folder_btn = gr.Button("Open Output Folder")
-    open_logs_folder_btn = gr.Button("Open Logs Folder")
+    with gr.Accordion("Procesado por lotes", open=False):
+        batch_input_files = gr.File(
+            file_count="multiple",
+            label="Archivos (WAV, FLAC, OGG, MP3)",
+            interactive=True,
+        )
+        batch_enhance_btn = gr.Button("Batch Enhance All Files")
+        batch_log = gr.Textbox(label="Batch log", lines=4, max_lines=12, interactive=False)
+
     with gr.Row():
-        input_audio_player = gr.Audio(label="Original Input Audio", type="filepath")
-        output_audio = gr.Audio(label="Enhanced Audio", type="filepath")
-    batch_log = gr.Textbox(label="Batch Processing Log", lines=5, interactive=False)
-    detail_log = gr.Textbox(
-        label="Detailed Processing Log (per-stage timings, GPU memory, scan iterations/s)",
-        lines=20,
-        max_lines=40,
-        interactive=False,
-    )
-    plot_output = gr.Plot(label="Spectrograms")
+        input_audio_player = gr.Audio(label="Original", type="filepath")
+        output_audio = gr.Audio(label="Enhanced", type="filepath")
+
+    with gr.Tabs():
+        with gr.Tab("Log detallado"):
+            detail_log = gr.Textbox(
+                label="Per-stage timings, GPU memory, scan/RTF",
+                lines=8,
+                max_lines=30,
+                interactive=False,
+            )
+        with gr.Tab("Espectrogramas"):
+            plot_output = gr.Plot(label="Spectrograms")
 
     def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
         return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
