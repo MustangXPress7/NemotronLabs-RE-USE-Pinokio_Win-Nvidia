@@ -8,11 +8,13 @@ this machine (RTX 4070, 12 GB) with the instrumentation added in
 
 ## TL;DR
 
-1. The app runs **one forward pass over the whole file** for the RealTime
-   family (`VARIANT_REGISTRY[...]["chunked"] = False` in `app.py`). The model
-   was trained and published as a **streaming** model that consumes one 20 ms
-   frame at a time; running it offline keeps a workspace proportional to
-   `duration x frequency bins` instead of `O(1)`.
+1. The RealTime family can run **one forward pass over the whole file** (the
+   offline path) or **frame by frame** with cached states (the streaming path
+   ported in `reuse_streaming.py`). The model was trained and published as a
+   streaming model; the offline pass keeps a workspace proportional to
+   `duration x frequency bins` instead of `O(1)`, so the app now auto-switches
+   to streaming when the predicted single-pass peak would exceed free VRAM (and
+   exposes a Streaming checkbox to force it). The Standard family stays chunked.
 2. `mamba_ssm` is installed **without** the compiled `selective_scan_cuda`
    extension (see `reuse_runtime.py`), so every scan goes through
    `selective_scan_ref`, a pure-Python kernel that materialises two float32
@@ -231,18 +233,43 @@ published 12-layer configuration is already tight against its 20 ms hop
 
 | Mitigation | Effect | Cost |
 |------------|--------|------|
+| **Streaming** (RealTime/Whisper, implemented) | Frame-by-frame `mamba.step()` with cached causal-conv/Mamba states: memory flat at ~140-160 MB, independent of duration | Slower model pass in this pure-Python/PyTorch fallback setup (see below) |
 | Use **Standard** (chunked) for long files | Peak set by chunk size (measured 1.32 GB for a 3 s / 16 kHz stereo chunk, 1.30 GB predicted) | Not the low-latency model |
-| Split the file into 5-8 s clips | Linear reduction | Manual work; chunk joins |
+| Process at a lower **target rate** (slider) | Shrinks `f_enc` linearly: 16 kHz / 8 kHz cost ~3x / ~6x less scan memory than 48 kHz | Bandwidth above the target lost |
+| Split the file into 5-8 s clips | Linear reduction for the single pass | Manual work; chunk joins |
 | Mono | ~2x less memory | Channel loss |
-| Resample to 16 kHz / 8 kHz | ~3x / ~6x less memory at 48 kHz | Bandwidth above 8/16 kHz lost |
-| Lower `exit_layer` | Faster, less fragmentation; peak unchanged | Quality |
+| Lower `exit_layer` | Faster; peak unchanged for the single pass, and fewer cached blocks in streaming | Quality |
 | `torch.cuda.empty_cache()` between chunks | Avoids fragmentation | Small overhead |
 
-A true fix for RealTime would be to port the streaming path from
-`online_inference.py`: cache the causal convolutions, allocate the Mamba states
-once, and feed one frame per step. That keeps all RealTime variants at O(1)
-memory and would also make the latency claims of the paper reproducible in the
-app. It is a larger change than this logging work and is not implemented here.
+## Streaming mode (implemented)
+
+`reuse_streaming.py` ports the official `online_inference.py` path from
+`nvidia/Real-time_RE-USE`: causal convolutions keep a time cache, the temporal
+Mamba runs through `mamba.step()` with cached conv/SSM states, and the frequency
+Mamba (non-causal, full width) is evaluated per frame. Weights are shared by
+reference with the loaded model.
+
+Because this environment has no compiled `selective_scan_cuda` and the reference
+kernel's Python loop is extremely expensive per call, `reuse_runtime.py` also
+installs a chunked, closed-form selective scan (self-tested against the
+reference) so the per-frame frequency path is practical. The log reports
+per-frame latency, RTF and the streaming peak, and notes that the scan
+throughput counter only covers the frequency path (the temporal Mamba goes
+through `step`, outside the forward hooks).
+
+Measured on a 5 s / 16 kHz / mono clip, RTX 4070, `exit_layer=8`,
+`look_ahead=0`:
+
+| mode | model time | RTF | peak GPU memory | max audio diff vs offline |
+|------|------------|-----|-----------------|---------------------------|
+| offline (single pass) | 1.49 s | 0.30 | 2211 MB | - |
+| streaming (frame by frame) | 15.00 s | 3.00 | 156 MB | 1.12e-04 (mean 5.88e-06) |
+
+Streaming trades throughput for a memory footprint that does not grow with the
+file. The app exposes a **Streaming** checkbox for the RealTime/Whisper variants
+and also enables streaming automatically when the predicted single-pass peak
+exceeds free VRAM, to avoid an OOM or a WDDM spill into shared memory. Standard
+keeps its chunked overlap-add path.
 
 ## Reading the logs
 

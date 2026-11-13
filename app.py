@@ -22,6 +22,7 @@ CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
 
 from reuse_runtime import (
     bind_selective_scan_reference,
+    install_fast_selective_scan,
     patch_mamba_selective_scan,
 )
 from reuse_profiler import (
@@ -63,6 +64,7 @@ import numpy as np
 from models.stfts import mag_phase_stft, mag_phase_istft
 from utils.util import load_config, pad_or_trim_to_match
 from huggingface_hub import hf_hub_download
+from reuse_streaming import build_streaming_model, run_streaming_frames
 
 RELU = nn.ReLU()
 
@@ -71,6 +73,11 @@ def make_even(value):
     return value if value % 2 == 0 else value + 1
 
 device = "cuda"
+
+# Streaming runs the selective scan with a batch of one frame, where the
+# reference kernel's Python loop dominates. Swap in the chunked kernel there;
+# it self-tests against the reference and leaves it bound on any mismatch.
+install_fast_selective_scan()
 
 # ---------------------------------------------------------------------------
 # Model variant registry (Phase 2 tracer slice)
@@ -242,7 +249,7 @@ def _get_model(variant_id, logger=None):
     return _USE_MODELS[variant_id]
 
 @spaces.GPU
-def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
+def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
     """Enhance one file.
 
     Returns ``(input_path, output_path, spectrogram_figure, detailed_log)``.
@@ -251,6 +258,12 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
     to ``logs/inference/`` with a JSON sidecar. On failure the log is returned
     instead of raising, so the reason (and the OOM mitigation hints) reaches
     the UI.
+
+    ``lp_sr`` / ``target_sr`` reproduce the original NVIDIA app's bandwidth
+    extension: when a target rate is set the file is resampled to ``lp_sr``
+    first (the low-pass step) and then to ``target_sr``, which is the rate the
+    model runs at and the output is written at. ``streaming`` selects the
+    frame-by-frame RealTime path, which keeps memory flat over the file length.
     """
     # Gradio pasa la etiqueta completa del dropdown; convertirla al ID interno del registro.
     if variant_id in VARIANT_LABEL_TO_ID:
@@ -258,7 +271,10 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
 
     entry = VARIANT_REGISTRY.get(variant_id)
     is_realtime_family = bool(entry and entry.get("family") == "realtime")
-    mode = "single-pass (whole file)" if entry and not entry.get("chunked", True) else "chunked overlap-add"
+    if entry and not entry.get("chunked", True):
+        mode = "streaming (frame by frame)" if streaming else "single-pass (whole file)"
+    else:
+        mode = "chunked overlap-add"
     logger = InferenceLogger(run_name=f"{variant_id}_enhance")
     profiler = None
 
@@ -287,6 +303,48 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 Noisy_wav = torch.from_numpy(_data.T.copy())
                 original_noisy_wav = Noisy_wav.clone()
                 original_sr = noisy_sr
+
+            # 1b. Optional bandwidth extension, with the same semantics as the
+            # original NVIDIA app: a target rate enables the sliders, the
+            # low-pass rate is applied first, then the target rate, and the
+            # model runs (and the output is written) at the target rate.
+            lp_hz = int(lp_sr or 0)
+            target_hz = int(target_sr or 0)
+            if target_hz:
+                with logger.stage("resample", note=f"{noisy_sr} Hz -> {target_hz} Hz") as rec:
+                    if lp_hz:
+                        Noisy_wav = torch.from_numpy(
+                            librosa.resample(
+                                Noisy_wav.cpu().numpy(),
+                                orig_sr=noisy_sr,
+                                target_sr=lp_hz,
+                                res_type="kaiser_best",
+                            )
+                        )
+                        noisy_sr = lp_hz
+                        logger.info(
+                            f"low-pass: resampled to {lp_hz} Hz before the model, which removes "
+                            "content above that rate instead of faking it"
+                        )
+                    Noisy_wav = torch.from_numpy(
+                        librosa.resample(
+                            Noisy_wav.cpu().numpy(),
+                            orig_sr=noisy_sr,
+                            target_sr=target_hz,
+                            res_type="kaiser_best",
+                        )
+                    )
+                    noisy_sr = target_hz
+                    logger.info(
+                        f"target: processing and writing at {target_hz} Hz "
+                        f"({Noisy_wav.shape[1] / noisy_sr:.2f} s)"
+                    )
+                meta["resampled_to"] = f"{target_hz} Hz"
+            elif lp_hz:
+                logger.warn(
+                    f"low-pass rate ({lp_hz} Hz) ignored without a target rate: the original app "
+                    "only applies it when a target rate is set. Set both, or neither."
+                )
 
             if entry is None:
                 raise ValueError(f"Unknown variant id '{variant_id}'.")
@@ -352,10 +410,10 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                     "sample rate, so memory grows too. Resample to 16-48 kHz."
                 )
             if lp_sr or target_sr:
-                logger.warn(
-                    f"the low-pass ({lp_sr} Hz) and target ({target_sr} Hz) sliders are not "
-                    f"applied by this pipeline; the model still sees {noisy_sr} Hz audio. "
-                    "Resample the file before uploading to get the memory/speed benefit."
+                logger.info(
+                    f"resampling request: low-pass {lp_hz or 'off'} Hz -> target "
+                    f"{target_hz or 'off'} Hz; the frequency axis (and therefore memory) "
+                    f"scales with the rate the model runs at ({noisy_sr} Hz)"
                 )
 
             SE_model = _get_model(variant_id, logger=logger)
@@ -363,9 +421,15 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
             profiler = ModuleProfiler(SE_model)
             profiler.start()
             model_seconds = 0.0
+            streaming_used = False
 
             # 2. Configuración de chunking: Standard usa overlap-add; RealTime pasa single-pass
             if entry.get("chunked", True):
+                if streaming:
+                    logger.warn(
+                        "the Streaming box only applies to the RealTime/Whisper variants; this "
+                        "variant already processes in chunks, so the checkbox is ignored"
+                    )
                 chunk_size = int(chunk_size_s * noisy_sr)  # slider-driven chunk size
                 hop_length = int(overlap_portion * chunk_size)  # slider-driven overlap
                 if window_type == "Hamming":
@@ -505,15 +569,26 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                         f"gpu memory before inference: {mem['free_mb'] / 1024:.2f} GB free "
                         f"of {mem['total_mb'] / 1024:.2f} GB"
                     )
-                    if predicted_peak_mb > mem["free_mb"]:
-                        logger.warn(
-                            f"predicted peak ({predicted_peak_mb / 1024:.2f} GB) exceeds free "
-                            f"memory ({mem['free_mb'] / 1024:.2f} GB). Expect an OOM on Linux or "
-                            "a silent spill into shared system memory on Windows (which can be "
-                            "10-20x slower). Split the file, use mono, or resample."
-                        )
-                        for line in OOM_HINTS:
-                            logger.info("  " + line)
+
+                # Streaming keeps only one frame of context in cached causal-conv
+                # and Mamba states, so memory no longer grows with duration. It is
+                # also slower per second of audio, so it only takes over by itself
+                # when the single pass would not fit.
+                use_streaming = bool(streaming)
+                if use_streaming:
+                    logger.info(
+                        "mode: streaming requested; memory stays flat over the file length "
+                        "at the cost of a slower model pass"
+                    )
+                elif mem and predicted_peak_mb > mem["free_mb"]:
+                    use_streaming = True
+                    logger.warn(
+                        f"predicted single-pass peak ({predicted_peak_mb / 1024:.2f} GB) exceeds "
+                        f"free memory ({mem['free_mb'] / 1024:.2f} GB): switching to frame-by-frame "
+                        "streaming, which keeps memory flat. Tick the Streaming box to force it "
+                        "even when the single pass fits."
+                    )
+                streaming_used = use_streaming
 
                 with logger.stage("to_device"):
                     Noisy_wav = Noisy_wav.to(device)
@@ -535,13 +610,60 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 del noisy_com
                 torch.cuda.empty_cache()
 
-                with logger.stage(
-                    "model_forward",
-                    note=f"single pass over {audio_seconds:.2f} s, {geom['t_scan']} scan frames",
-                ) as rec:
-                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
-                    torch.cuda.synchronize()
-                model_seconds += rec["seconds"] if rec else 0.0
+                if use_streaming:
+                    with logger.stage(
+                        "streaming_setup",
+                        note=f"{geom['f_enc']} frequency bins of state, "
+                             f"look-ahead {look_ahead_frames} frame(s)",
+                    ):
+                        stream_model = build_streaming_model(SE_model)
+                        stream_model.reset(geom["f_enc"])
+                        logger.info(
+                            f"streaming: {geom['t_frames']} frames of "
+                            f"{1000.0 / geom['fps']:.0f} ms, exit layer {exit_layer}, "
+                            f"{geom['f_enc']} cached frequency states per block; "
+                            "each frame reuses the weights of the loaded model"
+                        )
+
+                    with logger.stage(
+                        "streaming_frames",
+                        note=f"{geom['t_frames']} frames one by one",
+                    ) as rec:
+                        torch.cuda.reset_peak_memory_stats()
+                        amp_g, pha_g, frame_seconds = run_streaming_frames(
+                            stream_model,
+                            noisy_mag,
+                            noisy_pha,
+                            exit_layer,
+                            look_ahead_frames,
+                        )
+                        torch.cuda.synchronize()
+                    model_seconds += rec["seconds"] if rec else 0.0
+                    peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                    del stream_model
+
+                    ordered = sorted(frame_seconds)
+                    p95 = ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+                    logger.info(
+                        f"streaming latency per frame: first {frame_seconds[0] * 1000:.1f} ms "
+                        f"(includes warm-up), mean {sum(frame_seconds) / len(frame_seconds) * 1000:.1f} ms, "
+                        f"median {ordered[len(ordered) // 2] * 1000:.1f} ms, p95 {p95 * 1000:.1f} ms"
+                    )
+                    logger.info(
+                        f"streaming peak GPU memory: {peak_mb:.1f} MB "
+                        f"(single pass would need {predicted_peak_mb / 1024:.2f} GB); "
+                        "memory is independent of the file length"
+                    )
+                    logger.set("streaming", True)
+                    logger.set("streaming_peak_mb", round(peak_mb, 1))
+                else:
+                    with logger.stage(
+                        "model_forward",
+                        note=f"single pass over {audio_seconds:.2f} s, {geom['t_scan']} scan frames",
+                    ) as rec:
+                        amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                        torch.cuda.synchronize()
+                    model_seconds += rec["seconds"] if rec else 0.0
 
                 with logger.stage("mask_postprocess"):
                     mag = torch.expm1(RELU(amp_g))
@@ -552,7 +674,7 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                 with logger.stage("pad_trim"):
                     audio_enhanced = pad_or_trim_to_match(Noisy_wav.detach(), audio_enhanced, pad_value=1e-8)
                 torch.cuda.synchronize()
-                print(f"[Timer] Inferencia single-pass completada", flush=True)
+                print("[Timer] Inferencia RealTime completada", flush=True)
                 assert audio_enhanced.shape == Noisy_wav.shape, audio_enhanced.shape
 
             profiler.stop()
@@ -568,6 +690,12 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                     f"kernel calls over {model_seconds:.2f} s of model time "
                     f"-> {iter_per_s:,.0f} scan_iter/s, {state_per_s:,.0f} state_updates/s"
                 )
+                if streaming_used:
+                    logger.info(
+                        "note: in streaming the temporal Mamba runs through mamba.step(), which "
+                        "bypasses the forward hooks, so these scan numbers only cover the "
+                        "frequency path"
+                    )
                 logger.info(
                     f"speed: {model_seconds:.2f} s of model time for {audio_seconds:.2f} s of audio "
                     f"-> RTF {model_seconds / audio_seconds:.3f} "
@@ -632,8 +760,8 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
 with gr.Blocks() as demo:
     gr.Markdown(ABOUT)
     gr.Markdown("**Note 1**: For bandwidth extension, the performance may be affected by the characteristics of the input data, particularly the cutoff pattern. A simple solution is to apply low-pass filtering beforehand.")
-    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. The **RealTime** variants run a single forward pass over the whole file, so memory grows with duration and sample rate. Split long recordings, use mono, resample to 16-48 kHz, or pick the **Standard** variant, which processes in chunks. Every run now prints a **Detailed Processing Log** with per-stage timings, GPU memory and scan iterations/s, and saves it to `logs/inference/`.")
-    gr.Markdown("**Note 3**: The low-pass and target sample-rate sliders are currently not applied by the pipeline; resample the file before uploading if you need the memory/speed benefit (the log warns you when they are set).")
+    gr.Markdown("**Note 2**: When processing long input audio, out-of-memory (OOM) errors may occur. The **RealTime** variants run a single forward pass over the whole file, so memory grows with duration and sample rate. Tick **Streaming** to run them frame by frame with cached states (flat memory, slower pass); it also switches on by itself when the predicted peak does not fit in free VRAM. **Standard** already processes in chunks, where the chunk size is the memory knob. Every run prints a **Detailed Processing Log** with per-stage timings, GPU memory, scan iterations/s and a per-block profile, and saves it to `logs/inference/`.")
+    gr.Markdown("**Note 3**: The target sample-rate slider makes the model run (and the output play) at that rate; the low-pass slider resamples to that rate first, the same bandwidth-extension order as the original NVIDIA app. Both are off at 0, and the low-pass rate only applies when a target rate is set. Processing at a lower rate shrinks the frequency axis, so it is also the cheapest way to cut memory.")
 
     with gr.Row():
         with gr.Column():
@@ -680,8 +808,8 @@ with gr.Blocks() as demo:
                 interactive=True,
             )
             normalization = gr.Slider(
-                minimum=0.0, maximum=1.0, value=1.0, step=0.1,
-                label="Normalization. Lower = quieter output. No speed impact.",
+                minimum=0.1, maximum=1.0, value=1.0, step=0.1,
+                label="Normalization. Lower = louder output. No speed impact.",
                 interactive=True,
             )
             exit_layer_slider = gr.Slider(
@@ -694,6 +822,15 @@ with gr.Blocks() as demo:
                 label="Look ahead frames (RealTime/Whisper only). Lower = faster but less future context.",
                 interactive=False,
             )
+            streaming_checkbox = gr.Checkbox(
+                value=False,
+                label=(
+                    "Streaming (RealTime/Whisper only). Frame-by-frame with cached states: "
+                    "memory stays flat however long the file is, at a slower model pass. "
+                    "It also switches on by itself when the single pass would exceed free VRAM."
+                ),
+                interactive=False,
+            )
 
     # Variant-dependent enable/disable for RealTime/Whisper sliders.
     # Gradio passes the full dropdown label; resolve it to the internal variant ID
@@ -702,9 +839,10 @@ with gr.Blocks() as demo:
         fn=lambda variant: (
             gr.update(interactive=VARIANT_LABEL_TO_ID.get(variant, "standard") in ("realtime", "whisper")),
             gr.update(interactive=VARIANT_LABEL_TO_ID.get(variant, "standard") in ("realtime", "whisper")),
+            gr.update(interactive=VARIANT_LABEL_TO_ID.get(variant, "standard") in ("realtime", "whisper")),
         ),
         inputs=[variant_dropdown],
-        outputs=[exit_layer_slider, look_ahead_frames_slider],
+        outputs=[exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
     )
 
     enhance_btn = gr.Button("Enhance")
@@ -723,10 +861,10 @@ with gr.Blocks() as demo:
     )
     plot_output = gr.Plot(label="Spectrograms")
 
-    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
-        return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
+    def unified_enhance(audio_path, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
+        return enhance(audio_path, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
 
-    def batch_enhance_files(batch_files, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0):
+    def batch_enhance_files(batch_files, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
         if batch_files is None:
             return None, None, None, "No batch files selected.", ""
         results = []
@@ -736,7 +874,7 @@ with gr.Blocks() as demo:
         for f in batch_files:
             name = os.path.basename(f.name)
             try:
-                original, enhanced_path, fig, detail = enhance(f.name, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames)
+                original, enhanced_path, fig, detail = enhance(f.name, lp_sr, target_sr, variant_id, chunk_size_s, overlap_portion, window_type, normalization, exit_layer, look_ahead_frames, streaming)
                 if enhanced_path:
                     results.append(enhanced_path)
                     messages.append(f"OK   {name} -> {os.path.basename(enhanced_path)}")
@@ -771,13 +909,13 @@ with gr.Blocks() as demo:
 
     enhance_btn.click(
         fn=unified_enhance,
-        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
+        inputs=[input_audio, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
         outputs=[input_audio_player, output_audio, plot_output, detail_log]
     )
 
     batch_enhance_btn.click(
         fn=batch_enhance_files,
-        inputs=[batch_input_files, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider],
+        inputs=[batch_input_files, low_pass_sampling_rate, target_sampling_rate, variant_dropdown, chunk_size_s, overlap_portion, window_type, normalization, exit_layer_slider, look_ahead_frames_slider, streaming_checkbox],
         outputs=[input_audio_player, output_audio, plot_output, batch_log, detail_log]
     )
 
