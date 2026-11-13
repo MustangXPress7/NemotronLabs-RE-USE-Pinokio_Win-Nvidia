@@ -391,6 +391,9 @@ def run_streaming_frames(
     exit_layer,
     look_ahead_frames=0,
     suppress_zero_mag=True,
+    progress=False,
+    progress_every=10,
+    progress_label="streaming",
 ):
     """Feed a full ``[B, F, T]`` spectrogram through ``stream_model`` one frame at a time.
 
@@ -401,7 +404,9 @@ def run_streaming_frames(
 
     Returns ``(mag, pha, frame_seconds)`` where ``mag``/``pha`` are
     ``[B, F, T]`` and ``frame_seconds`` is a list with the wall time of each
-    step (measured with CUDA events when available).
+    step (measured with CUDA events when available). When ``progress`` is set a
+    periodic line with frame count, percent, elapsed time and ETA is printed to
+    stdout so long runs can be monitored from the terminal.
     """
     look_ahead = int(look_ahead_frames or 0)
     n_frames = int(noisy_mag.shape[-1])
@@ -420,8 +425,30 @@ def run_streaming_frames(
     pha_out = []
     frame_seconds = []
     pending_events = []
+    progress_start = time.perf_counter()
+    steps_done = 0
+
+    def _report(done):
+        if not progress:
+            return
+        every = max(1, int(progress_every))
+        if done != n_frames and done % every != 0:
+            return
+        if use_cuda:
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - progress_start
+        avg = elapsed / max(done, 1)
+        remaining = max(n_frames - done, 0) * avg
+        pct = (done / n_frames * 100.0) if n_frames else 100.0
+        print(
+            f"[reuse][{progress_label}] frame {done}/{n_frames} "
+            f"({pct:5.1f}%)  {elapsed:7.2f}s elapsed  "
+            f"~{remaining:7.2f}s remaining  {avg * 1000:7.1f} ms/frame",
+            flush=True,
+        )
 
     def _step(start, end):
+        nonlocal steps_done
         if use_cuda:
             start_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
@@ -455,6 +482,8 @@ def run_streaming_frames(
 
         mag_out.append(mag_t)
         pha_out.append(pha_t)
+        steps_done += 1
+        _report(steps_done)
 
     # 1. Fill the look-ahead window.
     _step(0, look_ahead + 1)

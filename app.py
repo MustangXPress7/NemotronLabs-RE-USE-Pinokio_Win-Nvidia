@@ -248,6 +248,54 @@ def _get_model(variant_id, logger=None):
         logger.info(f"reusing cached model '{variant_id}'")
     return _USE_MODELS[variant_id]
 
+@contextlib.contextmanager
+def block_progress(model, total_blocks, label="model"):
+    """Print per-Mamba-block progress to the terminal during a forward pass.
+
+    Hooks ``model.TSMamba[:total_blocks]`` so each completed block reports its
+    index, cumulative time and an ETA. A ``torch.cuda.synchronize()`` is issued
+    per block to keep the timing honest, which is cheap relative to a block.
+    """
+    blocks = list(getattr(model, "TSMamba", []))[: max(int(total_blocks or 0), 0)]
+    if not blocks:
+        yield
+        return
+
+    total = len(blocks)
+    state = {"done": 0}
+    start = time.perf_counter()
+    handles = []
+
+    def make_hook():
+        def hook(_module, _inp, _out):
+            state["done"] += 1
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - start
+            done = state["done"]
+            avg = elapsed / done
+            remaining = max(total - done, 0) * avg
+            pct = done / total * 100.0
+            print(
+                f"[reuse][{label}] block {done}/{total} "
+                f"({pct:5.1f}%)  {elapsed:7.2f}s elapsed  "
+                f"~{remaining:7.2f}s remaining  {avg * 1000:7.1f} ms/block",
+                flush=True,
+            )
+        return hook
+
+    try:
+        for block in blocks:
+            handles.append(block.register_forward_hook(make_hook()))
+        yield
+    finally:
+        for handle in handles:
+            try:
+                handle.remove()
+            except Exception:
+                pass
+
+
 @spaces.GPU
 def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, overlap_portion=0.5, window_type="Hann", normalization=1.0, exit_layer=8, look_ahead_frames=0, streaming=False):
     """Enhance one file.
@@ -506,10 +554,12 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                             torch.cuda.synchronize()
                             t_model = time.perf_counter()
 
-                            if is_realtime_family:
-                                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
-                            else:
-                                amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
+                            total_blocks = exit_layer if is_realtime_family else len(SE_model.TSMamba)
+                            with block_progress(SE_model, total_blocks, label=f"{label}"):
+                                if is_realtime_family:
+                                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                                else:
+                                    amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha)
                             torch.cuda.synchronize()
                             t_istft = time.perf_counter()
                             model_seconds += t_istft - t_model
@@ -636,6 +686,9 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                             noisy_pha,
                             exit_layer,
                             look_ahead_frames,
+                            progress=True,
+                            progress_every=max(1, geom["t_frames"] // 20),
+                            progress_label="streaming",
                         )
                         torch.cuda.synchronize()
                     model_seconds += rec["seconds"] if rec else 0.0
@@ -661,7 +714,8 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                         "model_forward",
                         note=f"single pass over {audio_seconds:.2f} s, {geom['t_scan']} scan frames",
                     ) as rec:
-                        amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
+                        with block_progress(SE_model, exit_layer, label="model_forward"):
+                            amp_g, pha_g, _ = SE_model(noisy_mag, noisy_pha, layer_use=exit_layer, number_ahead=look_ahead_frames)
                         torch.cuda.synchronize()
                     model_seconds += rec["seconds"] if rec else 0.0
 
