@@ -689,11 +689,11 @@ def enhance(filepath, lp_sr, target_sr, variant_id="standard", chunk_size_s=3, o
                              f"look-ahead {look_ahead_frames} frame(s)",
                     ):
                         stream_model = build_streaming_model(SE_model)
-                        stream_model.reset(geom["f_enc"])
+                        stream_model.reset(geom["f_enc"], n_channels)
                         logger.info(
                             f"streaming: {geom['t_frames']} frames of "
                             f"{1000.0 / geom['fps']:.0f} ms, exit layer {exit_layer}, "
-                            f"{geom['f_enc']} cached frequency states per block; "
+                            f"{geom['f_enc']} cached frequency states x {n_channels} channel(s) per block; "
                             "each frame reuses the weights of the loaded model"
                         )
 

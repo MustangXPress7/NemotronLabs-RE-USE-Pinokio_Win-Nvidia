@@ -337,10 +337,10 @@ class StreamingSEMamba(nn.Module):
             [StreamingPhaseDecoder(decoder) for decoder in model.phase_decoder_list]
         )
 
-    def reset(self, freq_dim):
+    def reset(self, freq_dim, batch=1):
         self.dense_encoder.reset()
         for block in self.TSMamba:
-            block.reset(freq_dim)
+            block.reset(batch * freq_dim)
         for decoder in self.mask_decoder_list:
             decoder.reset()
         for decoder in self.phase_decoder_list:
