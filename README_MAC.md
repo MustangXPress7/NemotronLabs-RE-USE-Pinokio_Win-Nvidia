@@ -29,20 +29,24 @@ hacen en el host con NumPy.
 
 ## Cómo instalar esta rama (betatester)
 
-**Importante:** hay que especificar la rama. Si solo se pega la URL del repo,
-Pinokio clona `main` (la versión Windows/CUDA), no esta rama.
+**Importante:** el flujo *Create App → Download* de Pinokio 8.3.7 **no permite
+elegir rama**: solo pide Git URL y nombre de carpeta, y clona con
+`git clone --depth 1 --single-branch`. Si se pega solo la URL, se obtiene `main`
+(Windows/CUDA). Tampoco funcionan sufijos como `#mac-mlx`, `/tree/mac-mlx` ni
+`?branch=mac-mlx`: se pasan tal cual al clone.
 
-Opción A — CLI de Pinokio (recomendada):
+Por tanto, hay que clonar la rama manualmente en la carpeta de apps de Pinokio:
 
 ```bash
-pterm download https://github.com/MustangXPress7/NemotronLabs-RE-USE-Pinokio_Win-Nvidia.git RE-USE-MLX --branch=mac-mlx
+cd ~/.pinokio/api
+git clone --depth 1 --branch mac-mlx https://github.com/MustangXPress7/NemotronLabs-RE-USE-Pinokio_Win-Nvidia.git RE-USE-MLX
 ```
 
-Esto crea `PINOKIO_HOME/api/RE-USE-MLX`. Después, en la UI: **Install** →
-**Run RE-USE** → pestaña *Open UI*.
+(En macOS la ruta es `~/.pinokio/api`; en Windows sería `%USERPROFILE%\.pinokio\api`.)
 
-Opción B — Discover → *Download from URL*, pegando la URL y el nombre de rama
-`mac-mlx` cuando Pinokio lo pida.
+Después, en Pinokio → **Home** aparecerá la app **RE-USE Speech Enhancement
+(Apple Silicon)**. Abrirla y seguir: **Install** → **Run RE-USE** → pestaña
+*Open UI*.
 
 Si algo falla, adjunta el contenido de `logs/api/` (`install.js`, `run.js`,
 `verify.js`) y `logs/shell/`, además de la salida de `python verify_mac.py`.
