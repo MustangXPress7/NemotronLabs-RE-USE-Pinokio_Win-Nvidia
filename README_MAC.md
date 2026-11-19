@@ -100,14 +100,15 @@ de hardcodear `7860`.
 
 ## Fase 2: backend MLX nativo
 
-`mlx_backend.py` reserva la interfaz. Hay tres caminos; **ninguno está conectado
-a la UI todavía** y ninguno cambia el Install actual.
+`mlx_backend.py` reserva la interfaz. Hay cuatro caminos (cinco repositorios);
+**ninguno está conectado a la UI todavía** y ninguno cambia el Install actual.
 
 | Candidato | Tipo | Base | Licencia | requisito | RTF medido |
 |---|---|---|---|---|---|
 | `AILogDev/REUSE-MLX-CoreML` | MLX + Core ML (Swift/ReuseKit) | NemotronLabs RE-USE | **OpenMDW-1.1, uso comercial permitido** | Xcode 27.2 + Swift 6.4.2 | 0,198 / 0,147 (M2 Air) |
+| `okdohyuk/RE-USE-MLX-CoreML` | **Espejo sin cambios** del anterior (rev. `4b7e506`), para Nogmi | NemotronLabs RE-USE | **OpenMDW-1.1, uso comercial permitido** | igual que AILogDev; `ReuseKit.zip` NO está en el espejo | ídem |
 | `appautomaton/re-use-semamba-mlx` | **MLX puro en Python** (`mlx-speech`) | `nvidia/RE-USE` (anterior) | **NSCLv1, solo no comercial** | **Python 3.13+** | no publicado (paridad 0,9998) |
-| `faraday/re-use-mlx` | MLX / mlx-swift | `nvidia/RE-USE` | `other` (revisar) | por revisar | no publicado |
+| `faraday/re-use-mlx` | MLX Swift (`model_mlx.safetensors`, 38,6 MB) | `nvidia/RE-USE` (rev. `7619050`) | **NSCLv1, solo no comercial** | app/CLI nativa [SpeechLens](https://github.com/faraday/SpeechLens) | no publicado |
 
 ### Opción A — ReuseKit (la recomendada si hay uso comercial)
 
@@ -141,6 +142,20 @@ Es la única opción **100 % Python** (resuelve el problema del puente Swift), p
 3. **Generación distinta:** es el RE-USE anterior, no NemotronLabs; no es
    equivalente a la variante `standard` y no ofrece `laughter`.
 
-Decisión pendiente: añadirlo como variante *legacy / no comercial* en un entorno
-aparte, o descartarlo y esperar a un puerto MLX de NemotronLabs con licencia
-OpenMDW-1.1. Hasta entonces, la UI solo ofrece LiteRT.
+### Opción C — SpeechLens y el espejo `okdohyuk`
+
+`faraday/re-use-mlx` trae pesos MLX Swift de 30 capas para la app/CLI nativa
+**SpeechLens** (menu bar de macOS). Es la vía más parecida a un "CLI listo" de
+las que hemos visto, pero su licencia NSCLv1 también es **solo no comercial** y
+viene del `nvidia/RE-USE` antiguo. Acepta 8–48 kHz mono según su ficha.
+
+`okdohyuk/RE-USE-MLX-CoreML` no aporta un modelo nuevo: es un **espejo byte a
+byte** de `AILogDev/REUSE-MLX-CoreML` en la revisión fijada `4b7e506`
+(38 archivos, 54.206.689 bytes, mismos hashes). Su utilidad es ser una URL
+**estable y fijada** por si el repositorio original cambia; pero **no incluye
+`ReuseKit.zip`**, que hay que seguir bajando de AILogDev. Licencia OpenMDW-1.1,
+igual que el original.
+
+Decisión pendiente: añadir una variante *legacy / no comercial* en un entorno
+aparte, o quedarse con la vía OpenMDW-1.1 (AILogDev o su espejo) para la fase 2.
+Hasta entonces, la UI solo ofrece LiteRT.

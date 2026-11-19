@@ -13,8 +13,12 @@ Alternative candidates (NOT wired in, see README_MAC.md "Fase 2"):
     - appautomaton/re-use-semamba-mlx: pure-Python MLX via mlx-speech, but
       NSCLv1 (non-commercial), based on the older nvidia/RE-USE, and needs
       Python 3.13+ while this launcher's .env is 3.12 for ai-edge-litert.
-    - faraday/re-use-mlx: another conversion of the older nvidia/RE-USE;
-      license and runtime still to be reviewed.
+    - faraday/re-use-mlx: 30-layer MLX Swift weights for the SpeechLens macOS
+      CLI, also NSCLv1 (non-commercial) and based on the older nvidia/RE-USE;
+      8-48 kHz mono per its card.
+    - okdohyuk/RE-USE-MLX-CoreML: byte-identical mirror of the AILogDev pack at
+      pinned revision 4b7e506 (OpenMDW-1.1), useful as a stable URL, but it
+      does not mirror ReuseKit.zip. No new capability.
 
 Measured RTF (lower is faster, all offline):
     MacBook Air M2, 8-core GPU, MLX (`foldShared`) ........... 0.19824
