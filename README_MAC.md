@@ -100,7 +100,16 @@ de hardcodear `7860`.
 
 ## Fase 2: backend MLX nativo
 
-`mlx_backend.py` reserva la interfaz. Para activarlo:
+`mlx_backend.py` reserva la interfaz. Hay tres caminos; **ninguno está conectado
+a la UI todavía** y ninguno cambia el Install actual.
+
+| Candidato | Tipo | Base | Licencia | requisito | RTF medido |
+|---|---|---|---|---|---|
+| `AILogDev/REUSE-MLX-CoreML` | MLX + Core ML (Swift/ReuseKit) | NemotronLabs RE-USE | **OpenMDW-1.1, uso comercial permitido** | Xcode 27.2 + Swift 6.4.2 | 0,198 / 0,147 (M2 Air) |
+| `appautomaton/re-use-semamba-mlx` | **MLX puro en Python** (`mlx-speech`) | `nvidia/RE-USE` (anterior) | **NSCLv1, solo no comercial** | **Python 3.13+** | no publicado (paridad 0,9998) |
+| `faraday/re-use-mlx` | MLX / mlx-swift | `nvidia/RE-USE` | `other` (revisar) | por revisar | no publicado |
+
+### Opción A — ReuseKit (la recomendada si hay uso comercial)
 
 ```bash
 hf download AILogDev/REUSE-MLX-CoreML --local-dir ModelPack
@@ -112,4 +121,26 @@ xcrun swift run --build-system swiftbuild -c release reuse-probe \
 
 ReuseKit es un paquete Swift (`ReuseEngine.enhance`, modos `.mlx` y `.hybrid`),
 no un módulo Python. Conectarlo a Gradio requiere un pequeño CLI Swift que lea
-y escriba WAV; hasta entonces la UI solo ofrece LiteRT.
+y escriba WAV.
+
+### Opción B — `mlx-speech` (tentador, pero con tres bloqueos)
+
+```bash
+hf download appautomaton/re-use-semamba-mlx --local-dir models/reuse/mlx
+python -c "from mlx_speech.generation.reuse import REUSEEnhancer; ..."
+```
+
+Es la única opción **100 % Python** (resuelve el problema del puente Swift), pero:
+
+1. **Licencia:** deriva de `nvidia/RE-USE` bajo NSCLv1 (no comercial), mientras
+   que los grafos LiteRT que ya usamos son OpenMDW-1.1 (comercial permitido).
+   Meterlo en el mismo launcher mezclaría dos regímenes incompatibles.
+2. **Python:** `mlx-speech` exige **3.13+**; nuestro `.env` es 3.12 porque
+   `ai-edge-litert==2.3.0` se validó ahí. Haría falta un segundo entorno
+   (p. ej. `.env-mlx`) o arriesgar el backend principal.
+3. **Generación distinta:** es el RE-USE anterior, no NemotronLabs; no es
+   equivalente a la variante `standard` y no ofrece `laughter`.
+
+Decisión pendiente: añadirlo como variante *legacy / no comercial* en un entorno
+aparte, o descartarlo y esperar a un puerto MLX de NemotronLabs con licencia
+OpenMDW-1.1. Hasta entonces, la UI solo ofrece LiteRT.

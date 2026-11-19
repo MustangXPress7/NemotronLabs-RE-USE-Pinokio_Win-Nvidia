@@ -9,6 +9,13 @@ Source model pack (OpenMDW-1.1, commercial use permitted):
 Swift SDK, Mac CLI and samples:
     https://github.com/Corvelis/RE-USE-MLX-CoreML
 
+Alternative candidates (NOT wired in, see README_MAC.md "Fase 2"):
+    - appautomaton/re-use-semamba-mlx: pure-Python MLX via mlx-speech, but
+      NSCLv1 (non-commercial), based on the older nvidia/RE-USE, and needs
+      Python 3.13+ while this launcher's .env is 3.12 for ai-edge-litert.
+    - faraday/re-use-mlx: another conversion of the older nvidia/RE-USE;
+      license and runtime still to be reviewed.
+
 Measured RTF (lower is faster, all offline):
     MacBook Air M2, 8-core GPU, MLX (`foldShared`) ........... 0.19824
     MacBook Air M2, 8-core GPU, Core ML + MLX (`foldSeparate`) 0.14692
