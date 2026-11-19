@@ -27,7 +27,27 @@ hacen en el host con NumPy.
 | LiteRT → Metal (Python) | **Activo**, backend por defecto | M4 Max: ~0,45 s por segundo de audio; M2 sin medir |
 | MLX + Core ML (ReuseKit, Swift) | **Preparado**, no conectado a la UI | M2 Air: RTF 0,198 (MLX) / 0,147 (híbrido) |
 
-## Instalación y uso en Pinokio
+## Cómo instalar esta rama (betatester)
+
+**Importante:** hay que especificar la rama. Si solo se pega la URL del repo,
+Pinokio clona `main` (la versión Windows/CUDA), no esta rama.
+
+Opción A — CLI de Pinokio (recomendada):
+
+```bash
+pterm download https://github.com/MustangXPress7/NemotronLabs-RE-USE-Pinokio_Win-Nvidia.git RE-USE-MLX --branch=mac-mlx
+```
+
+Esto crea `PINOKIO_HOME/api/RE-USE-MLX`. Después, en la UI: **Install** →
+**Run RE-USE** → pestaña *Open UI*.
+
+Opción B — Discover → *Download from URL*, pegando la URL y el nombre de rama
+`mac-mlx` cuando Pinokio lo pida.
+
+Si algo falla, adjunta el contenido de `logs/api/` (`install.js`, `run.js`,
+`verify.js`) y `logs/shell/`, además de la salida de `python verify_mac.py`.
+
+## Instalación y uso en Pinokio (carpeta local ya clonada)
 
 1. Añade esta carpeta como app (File → Add App → Select this folder).
 2. **Install**: crea `.env` (Python 3.12), instala `requirements_mac.txt` con `uv`,
