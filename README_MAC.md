@@ -1,4 +1,4 @@
-# RE-USE Speech Enhancement · Apple Silicon (`mac-mlx`)
+# RE-USE Speech Enhancement · Mac Untested (`mac-mlx`)
 
 Launcher de Pinokio para mejorar grabaciones de voz en **Mac con Apple Silicon**.
 Es la contrapartida de la rama `main` (Windows/Nvidia + CUDA). Ambas ramas viven
