@@ -35,7 +35,20 @@ elegir rama**: solo pide Git URL y nombre de carpeta, y clona con
 (Windows/CUDA). Tampoco funcionan sufijos como `#mac-mlx`, `/tree/mac-mlx` ni
 `?branch=mac-mlx`: se pasan tal cual al clone.
 
-Por tanto, hay que clonar la rama manualmente en la carpeta de apps de Pinokio:
+### Forma recomendada: launcher puente (basta una URL)
+
+Existe un repo delgado que clona esta rama automáticamente. En Pinokio →
+**Create App → Download**, pegar:
+
+```
+https://github.com/MustangXPress7/RE-USE-AppleSilicon.git
+```
+
+Nombre de carpeta: `RE-USE-AppleSilicon`. Su `install.js` hace
+`git clone --depth 1 --branch mac-mlx ... app` y luego ejecuta `app/install.js`.
+Después: **Install** → **Run RE-USE** → pestaña *Open UI*.
+
+### Alternativa: clonar la rama a mano
 
 ```bash
 cd ~/.pinokio/api
@@ -44,9 +57,8 @@ git clone --depth 1 --branch mac-mlx https://github.com/MustangXPress7/NemotronL
 
 (En macOS la ruta es `~/.pinokio/api`; en Windows sería `%USERPROFILE%\.pinokio\api`.)
 
-Después, en Pinokio → **Home** aparecerá la app **RE-USE Speech Enhancement
-(Apple Silicon)**. Abrirla y seguir: **Install** → **Run RE-USE** → pestaña
-*Open UI*.
+En Pinokio → **Home** aparecerá la app **RE-USE Speech Enhancement (Apple
+Silicon)**. Abrirla y seguir: **Install** → **Run RE-USE** → pestaña *Open UI*.
 
 Si algo falla, adjunta el contenido de `logs/api/` (`install.js`, `run.js`,
 `verify.js`) y `logs/shell/`, además de la salida de `python verify_mac.py`.
