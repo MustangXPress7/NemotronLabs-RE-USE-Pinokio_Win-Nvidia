@@ -19,20 +19,28 @@ module.exports = {
       }
     },
     {
-      // Pinned mamba checkout and pure-Python build.
+      // LiteRT graphs downloaded by install.js.
       method: 'fs.rm',
       params: {
-        path: 'mamba',
+        path: 'models_litert',
         recursive: true,
         force: true
       }
     },
     {
-      // Legacy cleanup only: older installers cloned causal-conv1d.
-      // The current installer does not create this folder.
+      // Phase 2 model pack for the native MLX / Core ML backend.
       method: 'fs.rm',
       params: {
-        path: 'causal-conv1d',
+        path: 'ModelPack',
+        recursive: true,
+        force: true
+      }
+    },
+    {
+      // Phase 2 Swift SDK extracted beside the model pack.
+      method: 'fs.rm',
+      params: {
+        path: 'ReuseKit',
         recursive: true,
         force: true
       }
@@ -41,7 +49,7 @@ module.exports = {
       method: 'input',
       params: {
         title: 'Reset completed',
-        description: 'The Python environment, model cache, and mamba build were removed. Your output/ and logs/ folders were kept.'
+        description: 'The Python environment, model cache, and downloaded model packs were removed. Your output/ and logs/ folders were kept.'
       }
     }
   ]

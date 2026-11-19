@@ -3,7 +3,7 @@ module.exports = {
     {
       method: 'shell.run',
       params: {
-        message: 'python verify_gpu.py',
+        message: 'python verify_mac.py',
         path: '.',
         conda: {
           path: '.env'
@@ -13,8 +13,8 @@ module.exports = {
     {
       method: 'input',
       params: {
-        title: 'GPU verification passed',
-        description: 'CUDA is available and the required architectures are present. See the terminal output for the JSON report.'
+        title: 'Metal verification passed',
+        description: 'Apple Silicon host, LiteRT graphs and dependencies are present. See the terminal output for the JSON report.'
       }
     }
   ]

@@ -1,5 +1,10 @@
 # RE-USE Speech Enhancement - Pinokio App
 
+> **This branch (`mac-mlx`) targets Apple Silicon.** The Windows/Nvidia build is
+> `main`. For install, usage and API docs of this build see **[README_MAC.md](README_MAC.md)**.
+> The rest of this file describes the Windows/Nvidia baseline kept here for
+> cross-branch merges.
+
 Pinokio launcher for the **NVIDIA RE-USE Speech Enhancement** model.
 
 - Original Space: https://huggingface.co/spaces/nvidia/RE-USE

@@ -46,3 +46,11 @@ cache/HF_HOME/
 
 # Pinokio specific
 pinokio/logs/
+
+# Apple Silicon / LiteRT (mac-mlx branch)
+models_litert/
+ModelPack/
+ReuseKit/
+.planning/
+*.wav
+stereo-streaming-fix.patch

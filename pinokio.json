@@ -1,13 +1,12 @@
 {
   "version": "1.1",
-  "title": "RE-USE Speech Enhancement",
-  "description": "A universal speech enhancement model for diverse degradations, sampling rates, and languages made by Nvidia, using Nemotron RE-USE's Hugginspace Space clone for local inference. Compatible with Windows and CUDA 12.8 GPUs",
+  "title": "RE-USE Speech Enhancement (Apple Silicon)",
+  "description": "Offline speech enhancement for Apple Silicon using NVIDIA RE-USE LiteRT graphs on Metal, with a native MLX + Core ML path prepared. 16 kHz mono, file-based.",
   "icon": "icon.png",
-  "platform": ["win32", "linux"],
-  "arch": ["x64"],
-  "gpu": ["nvidia"],
+  "platform": ["darwin"],
+  "arch": ["arm64"],
   "categories": ["audio", "ai", "speech-enhancement"],
-  "tags": ["gradio", "mamba", "speech", "enhancement", "nvidia", "cuda", "model-variants", "realtime"],
+  "tags": ["gradio", "mamba", "speech", "enhancement", "apple-silicon", "metal", "litert", "mlx", "offline"],
   "license": "custom",
   "homepage": "https://huggingface.co/spaces/nvidia/Real-time_RE-USE",
   "repository": "https://github.com/NVIDIA/RE-USE"

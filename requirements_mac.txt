@@ -1,0 +1,7 @@
+numpy<2
+soundfile
+gradio
+matplotlib
+resampy
+huggingface_hub[hf_xet]
+ai-edge-litert==2.3.0

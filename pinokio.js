@@ -2,7 +2,7 @@ module.exports =
 {
 	version: '1.1',
 	title: 'RE-USE Speech Enhancement',
-	description: 'A universal speech enhancement model for diverse degradations, sampling rates, and languages made by Nvidia, using Nemotron RE-USE Hugginspace Space clone for local inference. Compatible with Windows and CUDA 12.8 GPUs',
+	description: 'Offline speech enhancement for Apple Silicon using NVIDIA RE-USE LiteRT graphs on Metal, with a native MLX + Core ML path prepared. 16 kHz mono, file-based.',
 	icon: 'icon.png',
 	menu: require(__dirname + '/menu.js')
 };
