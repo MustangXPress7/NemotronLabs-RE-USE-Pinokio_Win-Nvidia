@@ -4,7 +4,7 @@ module.exports = () => {
 	const config = {
 		daemon: true,
 		cmd: {
-			'Default': 'python app.py'
+			'Default': 'python app_mac.py'
 		},
 		run: [
 			{
